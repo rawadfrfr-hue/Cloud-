@@ -1,12 +1,15 @@
 import express from "express";
+import cors from "cors";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import unzipper from "unzipper";
-import admin from "firebase-admin";
+import AdmZip from "adm-zip";
+import { initializeApp, getApps } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 import { Upload } from "@aws-sdk/lib-storage";
 import { Readable, PassThrough } from "stream";
+import fs from "fs";
 
 // Make sure to load environment variables in development
 import dotenv from "dotenv";
@@ -15,36 +18,23 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
+app.use(cors());
 app.use(express.json());
 
-// Initialize Firebase Admin (Lazy)
-let firebaseDb: admin.firestore.Firestore | null = null;
-function getDb() {
-  if (!firebaseDb) {
-    try {
-      if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
-        if (!admin.apps.length) {
-          admin.initializeApp({
-            credential: admin.credential.cert({
-              projectId: process.env.FIREBASE_PROJECT_ID,
-              privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-              clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-            })
-          });
-        }
-      } else {
-        // Fallback for default credentials
-        if (!admin.apps.length) {
-          admin.initializeApp();
-        }
-      }
-      firebaseDb = admin.firestore();
-    } catch (e) {
-      console.error("Firebase Admin initialization failed.", e);
-      throw new Error("Database not initialized");
-    }
+// Initialize Firebase Admin just for Token Verification (No DB access required)
+let projectId = "demo-project";
+try {
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    if (config.projectId) projectId = config.projectId;
   }
-  return firebaseDb;
+} catch (e) {
+  console.warn("Could not load firebase-applet-config.json", e);
+}
+
+if (!getApps().length) {
+  initializeApp({ projectId });
 }
 
 // S3 Client for Cloudflare R2
@@ -79,7 +69,7 @@ async function verifyAuth(req: express.Request, res: express.Response, next: exp
   
   const token = authHeader.split("Bearer ")[1];
   try {
-    const decodedToken = await admin.auth().verifyIdToken(token);
+    const decodedToken = await getAuth().verifyIdToken(token);
     (req as any).user = decodedToken;
     next();
   } catch (error) {
@@ -126,6 +116,27 @@ function isSafePath(filePath: string) {
   return !normalized.startsWith('..') && !normalized.startsWith('/');
 }
 
+// Public download link via object key
+app.get("/api/download", async (req, res) => {
+  try {
+    const { key } = req.query;
+    if (!key || typeof key !== "string") {
+      return res.status(400).send("File key missing");
+    }
+    const s3 = getS3Client();
+    const bucket = getBucketName();
+    const command = new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    });
+    const url = await getSignedUrl(s3, command, { expiresIn: 3600 });
+    res.redirect(url);
+  } catch (error) {
+    console.error("Error generating download URL:", error);
+    res.status(500).send("Failed to generate download URL");
+  }
+});
+
 // Extract ZIP endpoint
 app.post("/api/extract-zip", verifyAuth, async (req, res) => {
   try {
@@ -138,7 +149,6 @@ app.post("/api/extract-zip", verifyAuth, async (req, res) => {
 
     const s3 = getS3Client();
     const bucket = getBucketName();
-    const db = getDb();
 
     // 1. Get the ZIP file stream from R2
     const getCommand = new GetObjectCommand({
@@ -151,84 +161,69 @@ app.post("/api/extract-zip", verifyAuth, async (req, res) => {
       return res.status(404).json({ error: "File not found" });
     }
 
-    const zipStream = Body as NodeJS.ReadableStream;
+    const byteArray = await Body.transformToByteArray();
+    const buffer = Buffer.from(byteArray);
+    
     let extractedFilesCount = 0;
     const extractedMetadata = [];
-    
     const maxFileSize = 50 * 1024 * 1024; // 50MB Zip Bomb protection per file
 
-    // 2. Stream and Parse ZIP
-    await new Promise((resolve, reject) => {
-      zipStream
-        .pipe(unzipper.Parse())
-        .on('entry', async (entry) => {
-          const fileName = entry.path;
-          const type = entry.type; // 'Directory' or 'File'
-          const size = entry.vars.uncompressedSize; // Optional, might be undefined for some zips
+    // 2. Parse ZIP
+    const zip = new AdmZip(buffer);
+    const zipEntries = zip.getEntries();
+    
+    for (const entry of zipEntries) {
+      const fileName = entry.entryName;
+      const isDirectory = entry.isDirectory;
+      const size = entry.header.size;
 
-          // Zip Slip Protection
-          if (!isSafePath(fileName)) {
-            console.warn(`Skipping unsafe path: ${fileName}`);
-            entry.autodrain();
-            return;
-          }
+      if (!isSafePath(fileName)) {
+        console.warn(`Skipping unsafe path: ${fileName}`);
+        continue;
+      }
 
-          if (type === 'File') {
-            // Zip bomb protection
-            if (size !== undefined && size > maxFileSize) {
-               console.warn(`File ${fileName} exceeds max size limit, skipping.`);
-               entry.autodrain();
-               return;
-            }
+      if (!isDirectory) {
+        if (size > maxFileSize) {
+           console.warn(`File ${fileName} exceeds max size limit, skipping.`);
+           continue;
+        }
 
-            // Create a target key in R2
-            const prefix = folderId ? `${userId}/${folderId}/` : `${userId}/root/`;
-            const targetKey = `${prefix}extracted_${Date.now()}_${path.basename(fileName)}`;
+        const prefix = folderId ? `${userId}/${folderId}/` : `${userId}/root/`;
+        const targetKey = `${prefix}extracted_${Date.now()}_${path.basename(fileName)}`;
 
-            try {
-              // 3. Upload extracted file back to R2 using @aws-sdk/lib-storage Upload
-              // Create a PassThrough stream to pipe from entry to R2
-              const passThrough = new PassThrough();
-              entry.pipe(passThrough);
+        try {
+          const fileDataBuffer = entry.getData();
 
-              const upload = new Upload({
-                client: s3,
-                params: {
-                  Bucket: bucket,
-                  Key: targetKey,
-                  Body: passThrough,
-                },
-              });
+          const command = new PutObjectCommand({
+            Bucket: bucket,
+            Key: targetKey,
+            Body: fileDataBuffer,
+          });
 
-              await upload.done();
-              
-              // 4. Save metadata to Firestore
-              const fileData = {
-                userId,
-                folderId: folderId || null,
-                name: path.basename(fileName),
-                fileUrl: targetKey,
-                size: size || 0,
-                type: path.extname(fileName) || 'application/octet-stream',
-                createdAt: admin.firestore.FieldValue.serverTimestamp(),
-              };
-              
-              const docRef = await db.collection("files").add(fileData);
-              extractedMetadata.push({ id: docRef.id, ...fileData });
-              extractedFilesCount++;
-              
-            } catch (err) {
-              console.error(`Failed to upload extracted file ${fileName}`, err);
-              entry.autodrain();
-            }
-          } else {
-            // Skip directories for now, or you could create folder metadata
-            entry.autodrain();
-          }
-        })
-        .on('close', resolve)
-        .on('error', reject);
-    });
+          await s3.send(command);
+          
+          const fileData = {
+            userId,
+            folderId: folderId || null,
+            name: path.basename(fileName),
+            fileUrl: targetKey,
+            size: size || 0,
+            type: path.extname(fileName) || 'application/octet-stream',
+          };
+          
+          extractedMetadata.push(fileData);
+          extractedFilesCount++;
+          
+        } catch (err: any) {
+          console.error(`Failed to upload extracted file ${fileName}`, err);
+          extractedMetadata.push({ error: `Failed to extract ${fileName}: ${err.message}` });
+        }
+      }
+    }
+
+    if (extractedFilesCount === 0 && extractedMetadata.some(m => m.error)) {
+        return res.status(500).json({ error: extractedMetadata.find(m => m.error)?.error });
+    }
 
     res.json({
       success: true,

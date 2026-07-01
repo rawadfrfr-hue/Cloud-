@@ -2,13 +2,15 @@ import { useState, useEffect } from "react";
 import { auth, googleProvider } from "./firebase";
 import { signInWithPopup, User, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
 import Dashboard from "./components/Dashboard";
-import { Cloud, Loader2, Mail, Lock } from "lucide-react";
+import { Cloud, Loader2, Mail, Lock, Eye, EyeOff } from "lucide-react";
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
   const [authError, setAuthError] = useState("");
 
@@ -28,9 +30,13 @@ export default function App() {
     }
   };
 
-  const handleEmailAuth = async (e: React.FormEvent) => {
+  const handleEmailAuth = async (e: import("react").FormEvent) => {
     e.preventDefault();
     setAuthError("");
+    if (isSignUp && password !== confirmPassword) {
+      setAuthError("Passwords do not match");
+      return;
+    }
     try {
       if (isSignUp) {
         await createUserWithEmailAndPassword(auth, email, password);
@@ -80,14 +86,34 @@ export default function App() {
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
               <input 
-                type="password" 
+                type={showPassword ? "text" : "password"}
                 placeholder="Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-10 pr-10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500/50"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
+            {isSignUp && (
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <input 
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Confirm Password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                  className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-10 pr-10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                />
+              </div>
+            )}
             {authError && <div className="text-rose-400 text-xs text-left">{authError}</div>}
             <button 
               type="submit"
@@ -114,7 +140,11 @@ export default function App() {
           <div className="mt-6 text-sm text-slate-400">
             {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
             <button 
-              onClick={() => setIsSignUp(!isSignUp)}
+              onClick={() => {
+                setIsSignUp(!isSignUp);
+                setAuthError("");
+                setConfirmPassword("");
+              }}
               className="text-sky-400 hover:text-sky-300 font-medium transition-colors"
             >
               {isSignUp ? "Sign In" : "Sign Up"}
