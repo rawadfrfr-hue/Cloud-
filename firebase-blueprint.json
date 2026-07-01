@@ -1,0 +1,54 @@
+{
+  "projectInfo": {
+    "name": "Cloud Storage ZIP Extractor",
+    "description": "Cloud storage app with ZIP extraction capabilities using Cloudflare R2 and Firebase."
+  },
+  "collections": [
+    {
+      "name": "users",
+      "fields": [
+        { "name": "uid", "type": "string", "description": "Firebase Auth UID" },
+        { "name": "email", "type": "string" },
+        { "name": "displayName", "type": "string" },
+        { "name": "createdAt", "type": "timestamp" }
+      ],
+      "rules": [
+        { "action": "read", "condition": "request.auth != null && request.auth.uid == resource.data.uid" },
+        { "action": "write", "condition": "request.auth != null && request.auth.uid == request.resource.data.uid" }
+      ]
+    },
+    {
+      "name": "folders",
+      "fields": [
+        { "name": "userId", "type": "string" },
+        { "name": "parentFolderId", "type": "string", "description": "null if root" },
+        { "name": "name", "type": "string" },
+        { "name": "createdAt", "type": "timestamp" }
+      ],
+      "rules": [
+        { "action": "read", "condition": "request.auth != null && resource.data.userId == request.auth.uid" },
+        { "action": "create", "condition": "request.auth != null && request.resource.data.userId == request.auth.uid" },
+        { "action": "update", "condition": "request.auth != null && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid" },
+        { "action": "delete", "condition": "request.auth != null && resource.data.userId == request.auth.uid" }
+      ]
+    },
+    {
+      "name": "files",
+      "fields": [
+        { "name": "userId", "type": "string" },
+        { "name": "folderId", "type": "string", "description": "null if root" },
+        { "name": "name", "type": "string" },
+        { "name": "fileUrl", "type": "string" },
+        { "name": "size", "type": "number" },
+        { "name": "type", "type": "string" },
+        { "name": "createdAt", "type": "timestamp" }
+      ],
+      "rules": [
+        { "action": "read", "condition": "request.auth != null && resource.data.userId == request.auth.uid" },
+        { "action": "create", "condition": "request.auth != null && request.resource.data.userId == request.auth.uid" },
+        { "action": "update", "condition": "request.auth != null && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid" },
+        { "action": "delete", "condition": "request.auth != null && resource.data.userId == request.auth.uid" }
+      ]
+    }
+  ]
+}

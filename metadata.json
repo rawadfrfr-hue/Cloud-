@@ -1,0 +1,6 @@
+{
+  "name": "Cloud Storage Extractor",
+  "description": "Cloud storage dashboard with Cloudflare R2 and ZIP extraction.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
