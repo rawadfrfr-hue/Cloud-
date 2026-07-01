@@ -1,6 +1,6 @@
 {
-  "name": "Cloud Storage Extractor",
-  "description": "Cloud storage dashboard with Cloudflare R2 and ZIP extraction.",
+  "name": "Nebula Drive",
+  "description": "Secure, fast, and beautifully organized cloud storage with automatic extraction and media player support.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

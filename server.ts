@@ -10,6 +10,15 @@ import { getAuth } from "firebase-admin/auth";
 import { Upload } from "@aws-sdk/lib-storage";
 import { Readable, PassThrough } from "stream";
 import fs from "fs";
+import os from "os";
+import sharp from "sharp";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegStatic from "ffmpeg-static";
+
+// Set ffmpeg path
+if (ffmpegStatic) {
+  ffmpeg.setFfmpegPath(ffmpegStatic);
+}
 
 // Make sure to load environment variables in development
 import dotenv from "dotenv";
@@ -134,6 +143,86 @@ app.get("/api/download", async (req, res) => {
   } catch (error) {
     console.error("Error generating download URL:", error);
     res.status(500).send("Failed to generate download URL");
+  }
+});
+
+// Generate Thumbnail Endpoint
+app.post("/api/generate-thumbnail", verifyAuth, async (req, res) => {
+  try {
+    const userId = (req as any).user.uid;
+    const { objectKey, contentType } = req.body;
+    
+    if (!objectKey || !contentType) {
+      return res.status(400).json({ error: "Missing parameters" });
+    }
+
+    const s3 = getS3Client();
+    const bucket = getBucketName();
+    const thumbnailKey = `${userId}/thumbnails/thumb_${Date.now()}_${path.basename(objectKey)}.jpg`;
+
+    if (contentType.startsWith('image/')) {
+      const getCommand = new GetObjectCommand({ Bucket: bucket, Key: objectKey });
+      const { Body } = await s3.send(getCommand);
+      if (!Body) throw new Error("File body empty");
+      
+      const byteArray = await (Body as any).transformToByteArray();
+      const buffer = Buffer.from(byteArray);
+
+      const thumbnailBuffer = await sharp(buffer)
+        .resize(200, 200, { fit: 'cover' })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+
+      const putCommand = new PutObjectCommand({
+        Bucket: bucket,
+        Key: thumbnailKey,
+        Body: thumbnailBuffer,
+        ContentType: 'image/jpeg',
+      });
+      await s3.send(putCommand);
+
+      return res.json({ thumbnailKey });
+      
+    } else if (contentType.startsWith('video/')) {
+      const getCommand = new GetObjectCommand({ Bucket: bucket, Key: objectKey });
+      const presignedUrl = await getSignedUrl(s3, getCommand, { expiresIn: 3600 });
+      
+      const tmpFile = path.join(os.tmpdir(), `thumb_${Date.now()}.jpg`);
+
+      await new Promise((resolve, reject) => {
+        ffmpeg(presignedUrl)
+          .seekInput(1)
+          .frames(1)
+          .size('200x200')
+          .output(tmpFile)
+          .on('end', resolve)
+          .on('error', (err) => {
+            console.error("ffmpeg error:", err);
+            reject(err);
+          })
+          .run();
+      });
+
+      const thumbnailBuffer = await fs.promises.readFile(tmpFile);
+      
+      const putCommand = new PutObjectCommand({
+        Bucket: bucket,
+        Key: thumbnailKey,
+        Body: thumbnailBuffer,
+        ContentType: 'image/jpeg',
+      });
+      await s3.send(putCommand);
+
+      // Clean up temp file
+      await fs.promises.unlink(tmpFile).catch(e => console.error("Temp file cleanup failed:", e));
+
+      return res.json({ thumbnailKey });
+    } else {
+      return res.status(400).json({ error: "Unsupported content type for thumbnails" });
+    }
+  } catch (error: any) {
+    console.error("Thumbnail generation error:", error);
+    return res.status(500).json({ error: error.message });
   }
 });
 
