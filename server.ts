@@ -5,7 +5,7 @@ import { createServer as createViteServer } from "vite";
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import AdmZip from "adm-zip";
-import { initializeApp, getApps, cert } from "firebase-admin/app";
+import { initializeApp, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { Upload } from "@aws-sdk/lib-storage";
 import { Readable, PassThrough } from "stream";
@@ -14,10 +14,6 @@ import os from "os";
 import sharp from "sharp";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegStatic from "ffmpeg-static";
-import nodemailer from "nodemailer";
-import jwt from "jsonwebtoken";
-
-const JWT_SECRET = process.env.JWT_SECRET || "your-secure-jwt-secret-key-123";
 
 // Set ffmpeg path
 if (ffmpegStatic) {
@@ -34,53 +30,21 @@ const PORT = 3000;
 app.use(cors());
 app.use(express.json());
 
-// Initialize Firebase Admin for Token Verification
-let projectId = process.env.FIREBASE_PROJECT_ID || "demo-project";
-let credential;
-
+// Initialize Firebase Admin just for Token Verification (No DB access required)
+let projectId = "demo-project";
 try {
-  if (process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
-    // If running with environment variables (e.g., Railway)
-    credential = cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      // Handle escaped newlines in environment variables
-      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-    });
-  } else {
-    // Fallback for AI Studio or local development
-    const serviceAccountPath = path.join(process.cwd(), "service-account.json");
-    if (fs.existsSync(serviceAccountPath)) {
-      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf8"));
-      credential = cert(serviceAccount);
-      projectId = serviceAccount.project_id;
-    } else {
-      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-      if (fs.existsSync(configPath)) {
-        const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        if (config.projectId) projectId = config.projectId;
-      }
-    }
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    if (config.projectId) projectId = config.projectId;
   }
 } catch (e) {
-  console.warn("Could not load Firebase credentials", e);
+  console.warn("Could not load firebase-applet-config.json", e);
 }
 
 if (!getApps().length) {
-  initializeApp({
-    projectId,
-    ...(credential ? { credential } : {})
-  });
+  initializeApp({ projectId });
 }
-
-// Nodemailer transport setup
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
 
 // S3 Client for Cloudflare R2
 let s3Client: S3Client | null = null;
@@ -359,70 +323,6 @@ app.post("/api/extract-zip", verifyAuth, async (req, res) => {
   } catch (error: any) {
     console.error("Error extracting ZIP:", error);
     res.status(500).json({ error: error.message || "Failed to extract ZIP" });
-  }
-});
-
-// Endpoint to send custom verification email via Nodemailer
-app.post("/api/send-verification", async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ error: "'email' is required" });
-    }
-
-    // Generate a custom JWT for verification, avoiding Firebase's default link
-    const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
-    
-    // Create a link back to our React application's /verify route
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-    const host = req.headers.host;
-    const baseUrl = host ? `${protocol}://${host}` : 'http://localhost:3000';
-    const link = `${baseUrl}/verify?token=${token}`;
-
-    const info = await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: "Verify your email for Nebula Drive",
-      html: `
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2>Welcome to Nebula Drive!</h2>
-          <p>Please verify your email address by clicking the button below:</p>
-          <a href="${link}" style="display: inline-block; padding: 10px 20px; background-color: #0095ff; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px; margin-bottom: 20px;">
-            Verify Email
-          </a>
-          <p style="color: #666; font-size: 14px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
-          <p style="color: #666; font-size: 14px; word-break: break-all;">${link}</p>
-        </div>
-      `,
-    });
-
-    res.json({ success: true, message: "Verification email sent successfully", data: info });
-  } catch (error: any) {
-    console.error("Error sending verification email:", error);
-    res.status(500).json({ error: error.message || "Failed to send verification email" });
-  }
-});
-
-// Endpoint to verify the custom email token
-app.post("/api/verify-email", async (req, res) => {
-  try {
-    const { token } = req.body;
-    if (!token) {
-      return res.status(400).json({ error: "Token is required" });
-    }
-
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET) as { email: string };
-    const email = decoded.email;
-
-    // Use Firebase Admin only to mark the user as verified
-    const user = await getAuth().getUserByEmail(email);
-    await getAuth().updateUser(user.uid, { emailVerified: true });
-
-    res.json({ success: true, message: "Email verified successfully" });
-  } catch (error: any) {
-    console.error("Verification error:", error);
-    res.status(400).json({ error: "Invalid or expired token" });
   }
 });
 

@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
 import { auth, googleProvider } from "./firebase";
-import { signInWithPopup, User, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
+import { signInWithPopup, User, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification } from "firebase/auth";
 import Dashboard from "./components/Dashboard";
 import SharePage from "./components/SharePage";
-import VerifyEmailPage from "./components/VerifyEmailPage";
 import NebulaLogo from "./components/NebulaLogo";
 import { 
   Cloud, Loader2, Mail, Lock, Eye, EyeOff, Film, X, Check, Folder, Archive, Shield, Zap, Sparkles, ArrowRight 
@@ -22,7 +21,6 @@ export default function App() {
   const [verificationSent, setVerificationSent] = useState(false);
 
   const isShareView = window.location.pathname === "/share";
-  const isVerifyView = window.location.pathname === "/verify";
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -63,51 +61,21 @@ export default function App() {
       }
       
       try {
-        await createUserWithEmailAndPassword(auth, email, password);
-        
-        // Call our backend to send custom verification email via Nodemailer
-        const response = await fetch("/api/send-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email })
-        });
-        
-        if (!response.ok) {
-          const errData = await response.json();
-          throw new Error(errData.error || "Failed to send verification email");
-        }
-
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        await sendEmailVerification(userCredential.user);
         await auth.signOut();
         setVerificationSent(true);
         setShowAuthModal(false);
       } catch (error: any) {
         console.error("Error with email signup", error);
-        if (error.code === 'auth/email-already-in-use') {
-           setAuthError("Email is already registered. Please sign in instead.");
-        } else {
-           setAuthError(error.message);
-        }
+        setAuthError(error.message);
       }
     } else {
       try {
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         if (!userCredential.user.emailVerified) {
           await auth.signOut();
-          
-          // Optionally attempt to resend if they try to login again while unverified
-          const response = await fetch("/api/send-verification", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email })
-          });
-          
-          if (!response.ok) {
-            const errData = await response.json();
-            setAuthError("Please verify your email. " + (errData.error || "Failed to resend link."));
-          } else {
-            setVerificationSent(true);
-            setShowAuthModal(false);
-          }
+          setAuthError("Please verify your email link before logging in.");
           return;
         }
         setShowAuthModal(false);
@@ -129,10 +97,6 @@ export default function App() {
   // Render the public SharePage view bypass for guests or users alike
   if (isShareView) {
     return <SharePage />;
-  }
-
-  if (isVerifyView) {
-    return <VerifyEmailPage />;
   }
 
   if (verificationSent) {

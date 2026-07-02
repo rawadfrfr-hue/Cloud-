@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from "../firebase";
-import { onAuthStateChanged, User, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup } from "firebase/auth";
+import { onAuthStateChanged, User, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, sendEmailVerification } from "firebase/auth";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import NebulaLogo from "./NebulaLogo";
 import { 
@@ -405,29 +405,13 @@ export default function SharePage() {
       }
 
       try {
-        await createUserWithEmailAndPassword(auth, email, password);
-        
-        // Call our backend to send custom verification email via Nodemailer
-        const response = await fetch("/api/send-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email })
-        });
-        
-        if (!response.ok) {
-          const errData = await response.json();
-          throw new Error(errData.error || "Failed to send verification email");
-        }
-
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        await sendEmailVerification(userCredential.user);
         await auth.signOut();
         setVerificationSent(true);
       } catch (error: any) {
         console.error("Auth signup error", error);
-        if (error.code === 'auth/email-already-in-use') {
-           setAuthError("Email is already registered. Please sign in instead.");
-        } else {
-           setAuthError(error.message);
-        }
+        setAuthError(error.message);
       } finally {
         setAuthLoading(false);
       }
@@ -436,20 +420,7 @@ export default function SharePage() {
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         if (!userCredential.user.emailVerified) {
           await auth.signOut();
-          
-          // Optionally attempt to resend if they try to login again while unverified
-          const response = await fetch("/api/send-verification", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email })
-          });
-          
-          if (!response.ok) {
-            const errData = await response.json();
-            setAuthError("Please verify your email. " + (errData.error || "Failed to resend link."));
-          } else {
-            setVerificationSent(true);
-          }
+          setAuthError("Please verify your email link before logging in.");
           setAuthLoading(false);
           return;
         }
