@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
-import { auth, db, googleProvider } from "../firebase";
+import { auth, db, googleProvider, handleFirestoreError, OperationType } from "../firebase";
 import { onAuthStateChanged, User, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup } from "firebase/auth";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import NebulaLogo from "./NebulaLogo";
 import { 
   Play, Pause, Download, FolderPlus, MoreVertical, X, Menu, Copy, Check, ExternalLink, 
-  Loader2, Mail, Lock, Eye, EyeOff, Film, Globe, Info, Heart, ArrowRight
+  Loader2, Mail, Lock, Eye, EyeOff, Film, Globe, Info, Heart, ArrowRight,
+  Maximize, Minimize, Volume2, VolumeX, Sun
 } from "lucide-react";
 
 export default function SharePage() {
@@ -26,8 +27,260 @@ export default function SharePage() {
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">("idle");
   const [saveErrorMsg, setSaveErrorMsg] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
+
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [brightness, setBrightness] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const [gestureIndicator, setGestureIndicator] = useState<{ type: 'volume' | 'brightness', value: number } | null>(null);
+  const [prevVolume, setPrevVolume] = useState(1);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const seekbarRef = useRef<HTMLDivElement>(null);
+  
+  const touchStartY = useRef(0);
+  const touchStartX = useRef(0);
+  const startVolume = useRef(1);
+  const startBrightness = useRef(1);
+  const isSwiping = useRef(false);
+  const isMoving = useRef(false);
+  const swipeSide = useRef<'left' | 'right' | null>(null);
+  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const formatTime = (seconds: number) => {
+    if (isNaN(seconds) || seconds === Infinity) return "00:00";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    const pad = (num: number) => String(num).padStart(2, "0");
+    if (h > 0) {
+      return `${h}:${pad(m)}:${pad(s)}`;
+    }
+    return `${pad(m)}:${pad(s)}`;
+  };
+
+  const resetControlsTimeout = () => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current);
+    }
+    controlsTimeoutRef.current = setTimeout(() => {
+      if (isPlaying) {
+        setShowControls(false);
+      }
+    }, 3000);
+  };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isCurrentlyFullscreen = !!document.fullscreenElement;
+      setIsFullscreen(isCurrentlyFullscreen);
+      
+      const orientation = screen.orientation as any;
+      if (!isCurrentlyFullscreen && orientation && typeof orientation.unlock === "function") {
+        try {
+          orientation.unlock();
+        } catch (err) {
+          // ignore
+        }
+      }
+    };
+    
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+    
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    resetControlsTimeout();
+    return () => {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    };
+  }, [isPlaying]);
+
+  const handleTimeUpdate = () => {
+    if (videoRef.current) {
+      setCurrentTime(videoRef.current.currentTime);
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    if (videoRef.current) {
+      setDuration(videoRef.current.duration);
+      videoRef.current.volume = volume;
+    }
+  };
+
+  const handleToggleMute = () => {
+    if (!videoRef.current) return;
+    if (volume > 0) {
+      setPrevVolume(volume);
+      videoRef.current.volume = 0;
+      setVolume(0);
+    } else {
+      videoRef.current.volume = prevVolume;
+      setVolume(prevVolume);
+    }
+  };
+
+  const toggleFullscreen = async () => {
+    if (!containerRef.current) return;
+    
+    try {
+      if (!document.fullscreenElement) {
+        if (containerRef.current.requestFullscreen) {
+          await containerRef.current.requestFullscreen();
+        } else if ((containerRef.current as any).webkitRequestFullscreen) {
+          await (containerRef.current as any).webkitRequestFullscreen();
+        } else if ((containerRef.current as any).msRequestFullscreen) {
+          await (containerRef.current as any).msRequestFullscreen();
+        }
+        
+        const orientation = screen.orientation as any;
+        if (orientation && typeof orientation.lock === "function") {
+          try {
+            await orientation.lock("landscape");
+          } catch (orientationErr) {
+            console.warn("Could not lock orientation to landscape:", orientationErr);
+          }
+        }
+      } else {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        } else if ((document as any).msExitFullscreen) {
+          await (document as any).msExitFullscreen();
+        }
+        
+        const orientation = screen.orientation as any;
+        if (orientation && typeof orientation.unlock === "function") {
+          try {
+            orientation.unlock();
+          } catch (orientationErr) {
+            console.warn("Could not unlock orientation:", orientationErr);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Fullscreen toggle failed:", err);
+    }
+  };
+
+  const handleSeek = (clientX: number) => {
+    if (!seekbarRef.current || !videoRef.current || !duration) return;
+    const rect = seekbarRef.current.getBoundingClientRect();
+    const clickX = clientX - rect.left;
+    const percentage = Math.max(0, Math.min(1, clickX / rect.width));
+    videoRef.current.currentTime = percentage * duration;
+    setCurrentTime(percentage * duration);
+  };
+
+  const handleSeekbarMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    handleSeek(e.clientX);
+    
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      handleSeek(moveEvent.clientX);
+    };
+    
+    const handleMouseUp = () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+    
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  };
+
+  const handleSeekbarTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length !== 1) return;
+    handleSeek(e.touches[0].clientX);
+    
+    const handleTouchMove = (moveEvent: TouchEvent) => {
+      if (moveEvent.touches.length !== 1) return;
+      handleSeek(moveEvent.touches[0].clientX);
+    };
+    
+    const handleTouchEndEvent = () => {
+      document.removeEventListener("touchmove", handleTouchMove);
+      document.removeEventListener("touchend", handleTouchEndEvent);
+    };
+    
+    document.addEventListener("touchmove", handleTouchMove, { passive: true });
+    document.addEventListener("touchend", handleTouchEndEvent);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    touchStartY.current = touch.clientY;
+    touchStartX.current = touch.clientX;
+    isSwiping.current = true;
+    isMoving.current = false;
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const touchXRelative = touch.clientX - rect.left;
+    const isLeft = touchXRelative < rect.width / 2;
+    swipeSide.current = isLeft ? 'left' : 'right';
+
+    startVolume.current = videoRef.current ? videoRef.current.volume : 1;
+    startBrightness.current = brightness;
+    
+    resetControlsTimeout();
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!isSwiping.current || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const deltaY = touchStartY.current - touch.clientY;
+    const deltaX = touch.clientX - touchStartX.current;
+    
+    if (Math.abs(deltaY) > 8 || Math.abs(deltaX) > 8) {
+      isMoving.current = true;
+    }
+    
+    if (!isMoving.current) return;
+    
+    const change = deltaY / 150; 
+
+    if (swipeSide.current === 'right') {
+      const newVolume = Math.max(0, Math.min(1, startVolume.current + change));
+      if (videoRef.current) {
+        videoRef.current.volume = newVolume;
+        setVolume(newVolume);
+      }
+      setGestureIndicator({ type: 'volume', value: Math.round(newVolume * 100) });
+    } else if (swipeSide.current === 'left') {
+      const newBrightness = Math.max(0, Math.min(1, startBrightness.current + change));
+      setBrightness(newBrightness);
+      setGestureIndicator({ type: 'brightness', value: Math.round(newBrightness * 100) });
+    }
+    
+    resetControlsTimeout();
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    isSwiping.current = false;
+    swipeSide.current = null;
+    setTimeout(() => {
+      setGestureIndicator(null);
+    }, 800);
+    
+    if (!isMoving.current) {
+      if (!(e.target as HTMLElement).closest(".video-controls-container")) {
+        handlePlayToggle();
+      }
+    }
+    isMoving.current = false;
+  };
 
   // Get key and name from URL query params
   const urlParams = new URLSearchParams(window.location.search);
@@ -38,7 +291,12 @@ export default function SharePage() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
+      if (u && !u.emailVerified) {
+        auth.signOut();
+        setUser(null);
+      } else {
+        setUser(u);
+      }
       setUserLoading(false);
     });
     return () => unsubscribe();
@@ -101,16 +359,20 @@ export default function SharePage() {
       if (ext === 'avi') detectedType = "video/x-msvideo";
       if (ext === 'mkv') detectedType = "video/x-matroska";
 
-      await addDoc(collection(db, "files"), {
-        userId: user.uid,
-        folderId: null, // save in root
-        name: fileName,
-        fileUrl: fileKey,
-        thumbnailUrl: fileKey.replace("extracted_", "thumb_"), // fallback guess or blank
-        size: 0, // original size is unknown at this step but saving link works
-        type: detectedType,
-        createdAt: serverTimestamp(),
-      });
+      try {
+        await addDoc(collection(db, "files"), {
+          userId: user.uid,
+          folderId: null, // save in root
+          name: fileName,
+          fileUrl: fileKey,
+          thumbnailUrl: fileKey.replace("extracted_", "thumb_"), // fallback guess or blank
+          size: 0, // original size is unknown at this step but saving link works
+          type: detectedType,
+          createdAt: serverTimestamp(),
+        });
+      } catch (dbErr) {
+        handleFirestoreError(dbErr, OperationType.CREATE, "files");
+      }
 
       setSaveStatus("success");
       setTimeout(() => setSaveStatus("idle"), 5000);
@@ -128,28 +390,80 @@ export default function SharePage() {
     setAuthError("");
     setAuthLoading(true);
 
-    if (isSignUp && password !== confirmPassword) {
-      setAuthError("Passwords do not match");
-      setAuthLoading(false);
-      return;
-    }
-
-    try {
-      if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, email, password);
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
+    if (isSignUp) {
+      const isGmail = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i.test(email);
+      if (!isGmail) {
+        setAuthError("Only official Google Gmail accounts (@gmail.com) are allowed.");
+        setAuthLoading(false);
+        return;
       }
-      setShowAuthModal(false);
-      // Automatically attempt to save to drive after successful login
-      setTimeout(() => {
-        handleSaveToDrive();
-      }, 500);
-    } catch (error: any) {
-      console.error("Auth error", error);
-      setAuthError(error.message);
-    } finally {
-      setAuthLoading(false);
+
+      if (password !== confirmPassword) {
+        setAuthError("Passwords do not match");
+        setAuthLoading(false);
+        return;
+      }
+
+      try {
+        await createUserWithEmailAndPassword(auth, email, password);
+        
+        // Call our backend to send custom verification email via Nodemailer
+        const response = await fetch("/api/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email })
+        });
+        
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || "Failed to send verification email");
+        }
+
+        await auth.signOut();
+        setVerificationSent(true);
+      } catch (error: any) {
+        console.error("Auth signup error", error);
+        if (error.code === 'auth/email-already-in-use') {
+           setAuthError("Email is already registered. Please sign in instead.");
+        } else {
+           setAuthError(error.message);
+        }
+      } finally {
+        setAuthLoading(false);
+      }
+    } else {
+      try {
+        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        if (!userCredential.user.emailVerified) {
+          await auth.signOut();
+          
+          // Optionally attempt to resend if they try to login again while unverified
+          const response = await fetch("/api/send-verification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email })
+          });
+          
+          if (!response.ok) {
+            const errData = await response.json();
+            setAuthError("Please verify your email. " + (errData.error || "Failed to resend link."));
+          } else {
+            setVerificationSent(true);
+          }
+          setAuthLoading(false);
+          return;
+        }
+        setShowAuthModal(false);
+        // Automatically attempt to save to drive after successful login
+        setTimeout(() => {
+          handleSaveToDrive();
+        }, 500);
+      } catch (error: any) {
+        console.error("Auth signin error", error);
+        setAuthError(error.message);
+      } finally {
+        setAuthLoading(false);
+      }
     }
   };
 
@@ -288,24 +602,59 @@ export default function SharePage() {
         {/* 2. Middle Section (Video Player & Quick Links) */}
         <div className="w-full flex flex-col">
           {/* Responsive video container with letterboxing */}
-          <div className="w-full bg-black/60 rounded-3xl border border-white/10 overflow-hidden aspect-video relative group flex items-center justify-center">
+          <div 
+            ref={containerRef}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onMouseMove={resetControlsTimeout}
+            className={`bg-black overflow-hidden flex items-center justify-center relative group select-none transition-all duration-300 ${
+              isFullscreen 
+                ? "w-screen h-screen fixed inset-0 z-50 animate-fade-in" 
+                : "w-full aspect-video rounded-3xl border border-white/10"
+            }`}
+          >
             
             <video 
               ref={videoRef}
               src={`/api/download?key=${encodeURIComponent(fileKey)}`}
-              onClick={handlePlayToggle}
               onEnded={handleVideoEnded}
-              className="w-full h-full max-h-[500px] object-contain"
+              onTimeUpdate={handleTimeUpdate}
+              onLoadedMetadata={handleLoadedMetadata}
+              className="w-full h-full object-contain bg-black"
               playsInline
             >
               Your browser does not support the video tag.
             </video>
 
-            {/* Premium Center-Overlaid Play/Pause Button */}
+            {/* Brightness overlay layer */}
+            <div 
+              className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-150"
+              style={{ opacity: 1 - brightness }}
+            />
+
+            {/* Gesture indicator popup HUD */}
+            {gestureIndicator && (
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/85 border border-white/10 px-5 py-3 rounded-2xl flex flex-col items-center gap-2 pointer-events-none z-40 shadow-2xl backdrop-blur-md">
+                {gestureIndicator.type === 'volume' ? (
+                  <>
+                    {gestureIndicator.value === 0 ? <VolumeX className="w-8 h-8 text-rose-400" /> : <Volume2 className="w-8 h-8 text-[var(--primary-brand-color)]" />}
+                    <span className="text-sm font-bold text-white">Volume: {gestureIndicator.value}%</span>
+                  </>
+                ) : (
+                  <>
+                    <Sun className="w-8 h-8 text-amber-400 animate-pulse" />
+                    <span className="text-sm font-bold text-white">Brightness: {gestureIndicator.value}%</span>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Center-Overlaid Play Button when paused */}
             {!isPlaying && (
               <div 
                 onClick={handlePlayToggle}
-                className="absolute inset-0 bg-black/30 flex items-center justify-center cursor-pointer transition-all duration-300 group-hover:bg-black/40"
+                className="absolute inset-0 bg-black/30 flex items-center justify-center cursor-pointer transition-all duration-300 group-hover:bg-black/45"
               >
                 <button 
                   className="w-16 h-16 rounded-full bg-[var(--primary-brand-color)] hover:bg-[var(--primary-brand-hover)] text-white flex items-center justify-center shadow-2xl shadow-[var(--primary-brand-color)]/50 transition-all transform hover:scale-110 active:scale-95 duration-200"
@@ -315,18 +664,81 @@ export default function SharePage() {
               </div>
             )}
 
-            {isPlaying && (
+            {/* Custom Interactive HUD Video Controls Container */}
+            <div className={`video-controls-container absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent p-4 flex flex-col gap-3 transition-opacity duration-300 z-30 ${showControls || !isPlaying ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+              
+              {/* Custom Seekbar Timeline */}
               <div 
-                onClick={handlePlayToggle}
-                className="absolute inset-0 bg-transparent opacity-0 hover:opacity-100 bg-black/30 flex items-center justify-center cursor-pointer transition-all duration-300"
+                ref={seekbarRef}
+                onMouseDown={handleSeekbarMouseDown}
+                onTouchStart={handleSeekbarTouchStart}
+                className="w-full h-4 flex items-center cursor-pointer group/seekbar select-none"
               >
-                <button 
-                  className="w-16 h-16 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center shadow-2xl border border-white/10 transition-all transform hover:scale-105 active:scale-95 duration-200"
-                >
-                  <Pause className="w-7 h-7 fill-white" />
-                </button>
+                <div className="w-full h-1 bg-white/20 rounded-full relative group-hover/seekbar:h-1.5 transition-all overflow-visible">
+                  <div 
+                    className="absolute left-0 top-0 h-full bg-[var(--primary-brand-color)] rounded-full"
+                    style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+                  />
+                  <div 
+                    className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-md scale-0 group-hover/seekbar:scale-100 transition-transform duration-100 border border-[var(--primary-brand-color)]"
+                    style={{ left: `calc(${duration ? (currentTime / duration) * 100 : 0}% - 6px)` }}
+                  />
+                </div>
               </div>
-            )}
+
+              {/* Controls Row */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  {/* Play/Pause Button */}
+                  <button 
+                    onClick={handlePlayToggle}
+                    className="p-1.5 hover:bg-white/10 rounded-lg text-white transition-all transform hover:scale-110 active:scale-95"
+                  >
+                    {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white" />}
+                  </button>
+
+                  {/* Time Display */}
+                  <span className="text-xs font-mono text-slate-300">
+                    {formatTime(currentTime)} / {formatTime(duration)}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {/* Volume Slider Controls */}
+                  <div className="flex items-center gap-2 group/volume">
+                    <button 
+                      onClick={handleToggleMute}
+                      className="p-1.5 hover:bg-white/10 rounded-lg text-white transition-colors"
+                    >
+                      {volume === 0 ? <VolumeX className="w-5 h-5 text-rose-400" /> : <Volume2 className="w-5 h-5" />}
+                    </button>
+                    
+                    <input 
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={volume}
+                      onChange={(e) => {
+                        const newVol = parseFloat(e.target.value);
+                        setVolume(newVol);
+                        if (videoRef.current) videoRef.current.volume = newVol;
+                      }}
+                      className="w-0 group-hover/volume:w-16 transition-all duration-200 accent-[var(--primary-brand-color)] h-1 rounded-lg appearance-none bg-white/20 cursor-pointer hidden md:block"
+                    />
+                  </div>
+
+                  {/* Fullscreen Trigger */}
+                  <button 
+                    onClick={toggleFullscreen}
+                    className="p-1.5 hover:bg-white/10 rounded-lg text-white transition-all transform hover:scale-110 active:scale-95"
+                    title="Toggle Fullscreen"
+                  >
+                    {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Secondary Action Row directly below the video */}
@@ -335,7 +747,7 @@ export default function SharePage() {
               onClick={() => window.location.href = "/"}
               className="text-xs text-[var(--primary-brand-color)] hover:text-[var(--primary-brand-hover)] font-bold flex items-center gap-1.5 transition-colors group"
             >
-              Open in app <ExternalLink className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+              Go to Nabula Drive <ExternalLink className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
             </button>
 
             <div className="relative">
@@ -438,97 +850,123 @@ export default function SharePage() {
               <NebulaLogo className="w-10 h-10" />
             </div>
 
-            <h3 className="text-2xl font-bold text-white mb-2">
-              {isSignUp ? "Create a Nebula Account" : "Sign in to Nebula Drive"}
-            </h3>
-            <p className="text-slate-400 text-xs mb-6">
-              You need an account to save files instantly to your own secure cloud storage.
-            </p>
-
-            <form onSubmit={handleEmailAuth} className="flex flex-col gap-4 mb-6">
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-slate-500" />
-                <input 
-                  type="email" 
-                  placeholder="Email address"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[var(--primary-brand-color)]/50"
-                />
-              </div>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-slate-500" />
-                <input 
-                  type={showPassword ? "text" : "password"}
-                  placeholder="Password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-10 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[var(--primary-brand-color)]/50"
-                />
+            {verificationSent ? (
+              <div className="text-center py-4 flex flex-col items-center">
+                <div className="w-16 h-16 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center mb-6 shadow-xl shadow-[var(--primary-brand-color)]/10">
+                  <Mail className="w-8 h-8 text-[var(--primary-brand-color)]" />
+                </div>
+                <h3 className="text-2xl font-bold text-white mb-4">Verify Your Email</h3>
+                <p className="text-slate-300 text-sm mb-6 leading-relaxed">
+                  A verification link has been sent to your Gmail. Please verify it to log in.
+                </p>
+                <div className="text-xs text-slate-400 bg-white/5 border border-white/5 rounded-xl p-3 mb-6 text-left font-mono w-full">
+                  Please check your spam or promotions tab if you don't receive it in a few minutes.
+                </div>
                 <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+                  onClick={() => {
+                    setVerificationSent(false);
+                    setIsSignUp(false);
+                  }}
+                  className="w-full h-12 bg-[var(--primary-brand-color)] hover:bg-[var(--primary-brand-hover)] text-white font-bold rounded-xl transition-colors"
                 >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  Back to Sign In
                 </button>
               </div>
-              
-              {isSignUp && (
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-slate-500" />
-                  <input 
-                    type={showPassword ? "text" : "password"}
-                    placeholder="Confirm Password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    required
-                    className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-10 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[var(--primary-brand-color)]/50"
-                  />
+            ) : (
+              <>
+                <h3 className="text-2xl font-bold text-white mb-2">
+                  {isSignUp ? "Create a Nebula Account" : "Sign in to Nebula Drive"}
+                </h3>
+                <p className="text-slate-400 text-xs mb-6">
+                  You need an account to save files instantly to your own secure cloud storage.
+                </p>
+
+                <form onSubmit={handleEmailAuth} className="flex flex-col gap-4 mb-6">
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-slate-500" />
+                    <input 
+                      type="email" 
+                      placeholder="Email address"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                      className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[var(--primary-brand-color)]/50"
+                    />
+                  </div>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-slate-500" />
+                    <input 
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-10 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[var(--primary-brand-color)]/50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  
+                  {isSignUp && (
+                    <div className="relative">
+                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-slate-500" />
+                      <input 
+                        type={showPassword ? "text" : "password"}
+                        placeholder="Confirm Password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        required
+                        className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-10 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[var(--primary-brand-color)]/50"
+                      />
+                    </div>
+                  )}
+
+                  {authError && <div className="text-rose-400 text-xs text-left font-medium">{authError}</div>}
+
+                  <button 
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full h-12 bg-[var(--primary-brand-color)] hover:bg-[var(--primary-brand-hover)] text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                    {authLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : isSignUp ? "Sign Up" : "Sign In"}
+                  </button>
+                </form>
+
+                <div className="relative flex items-center gap-4 my-6">
+                  <div className="flex-1 border-t border-white/10"></div>
+                  <span className="text-xs text-slate-500 uppercase tracking-wider font-semibold">Or</span>
+                  <div className="flex-1 border-t border-white/10"></div>
                 </div>
-              )}
 
-              {authError && <div className="text-rose-400 text-xs text-left font-medium">{authError}</div>}
+                <button
+                  onClick={handleGoogleSignIn}
+                  disabled={authLoading}
+                  className="w-full h-12 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-semibold rounded-xl flex items-center justify-center gap-3 transition-colors disabled:opacity-50"
+                >
+                  <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />
+                  Continue with Google
+                </button>
 
-              <button 
-                type="submit"
-                disabled={authLoading}
-                className="w-full h-12 bg-[var(--primary-brand-color)] hover:bg-[var(--primary-brand-hover)] text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-              >
-                {authLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : isSignUp ? "Sign Up" : "Sign In"}
-              </button>
-            </form>
-
-            <div className="relative flex items-center gap-4 my-6">
-              <div className="flex-1 border-t border-white/10"></div>
-              <span className="text-xs text-slate-500 uppercase tracking-wider font-semibold">Or</span>
-              <div className="flex-1 border-t border-white/10"></div>
-            </div>
-
-            <button
-              onClick={handleGoogleSignIn}
-              disabled={authLoading}
-              className="w-full h-12 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-semibold rounded-xl flex items-center justify-center gap-3 transition-colors disabled:opacity-50"
-            >
-              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />
-              Continue with Google
-            </button>
-
-            <div className="mt-6 text-center text-sm text-slate-400">
-              {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
-              <button 
-                onClick={() => {
-                  setIsSignUp(!isSignUp);
-                  setAuthError("");
-                  setConfirmPassword("");
-                }}
-                className="text-[var(--primary-brand-color)] hover:text-[var(--primary-brand-hover)] font-semibold transition-colors"
-              >
-                {isSignUp ? "Sign In" : "Sign Up"}
-              </button>
-            </div>
+                <div className="mt-6 text-center text-sm text-slate-400">
+                  {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
+                  <button 
+                    onClick={() => {
+                      setIsSignUp(!isSignUp);
+                      setAuthError("");
+                      setConfirmPassword("");
+                    }}
+                    className="text-[var(--primary-brand-color)] hover:text-[var(--primary-brand-hover)] font-semibold transition-colors"
+                  >
+                    {isSignUp ? "Sign In" : "Sign Up"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

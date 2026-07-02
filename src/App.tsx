@@ -3,6 +3,7 @@ import { auth, googleProvider } from "./firebase";
 import { signInWithPopup, User, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
 import Dashboard from "./components/Dashboard";
 import SharePage from "./components/SharePage";
+import VerifyEmailPage from "./components/VerifyEmailPage";
 import NebulaLogo from "./components/NebulaLogo";
 import { 
   Cloud, Loader2, Mail, Lock, Eye, EyeOff, Film, X, Check, Folder, Archive, Shield, Zap, Sparkles, ArrowRight 
@@ -18,12 +19,19 @@ export default function App() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [authError, setAuthError] = useState("");
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
 
   const isShareView = window.location.pathname === "/share";
+  const isVerifyView = window.location.pathname === "/verify";
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      if (u && !u.emailVerified) {
+        auth.signOut();
+        setUser(null);
+      } else {
+        setUser(u);
+      }
       setLoading(false);
     });
     return () => unsubscribe();
@@ -41,20 +49,72 @@ export default function App() {
   const handleEmailAuth = async (e: import("react").FormEvent) => {
     e.preventDefault();
     setAuthError("");
-    if (isSignUp && password !== confirmPassword) {
-      setAuthError("Passwords do not match");
-      return;
-    }
-    try {
-      if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, email, password);
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
+    
+    if (isSignUp) {
+      const isGmail = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i.test(email);
+      if (!isGmail) {
+        setAuthError("Only official Google Gmail accounts (@gmail.com) are allowed.");
+        return;
       }
-      setShowAuthModal(false);
-    } catch (error: any) {
-      console.error("Error with email auth", error);
-      setAuthError(error.message);
+      
+      if (password !== confirmPassword) {
+        setAuthError("Passwords do not match");
+        return;
+      }
+      
+      try {
+        await createUserWithEmailAndPassword(auth, email, password);
+        
+        // Call our backend to send custom verification email via Nodemailer
+        const response = await fetch("/api/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email })
+        });
+        
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || "Failed to send verification email");
+        }
+
+        await auth.signOut();
+        setVerificationSent(true);
+        setShowAuthModal(false);
+      } catch (error: any) {
+        console.error("Error with email signup", error);
+        if (error.code === 'auth/email-already-in-use') {
+           setAuthError("Email is already registered. Please sign in instead.");
+        } else {
+           setAuthError(error.message);
+        }
+      }
+    } else {
+      try {
+        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        if (!userCredential.user.emailVerified) {
+          await auth.signOut();
+          
+          // Optionally attempt to resend if they try to login again while unverified
+          const response = await fetch("/api/send-verification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email })
+          });
+          
+          if (!response.ok) {
+            const errData = await response.json();
+            setAuthError("Please verify your email. " + (errData.error || "Failed to resend link."));
+          } else {
+            setVerificationSent(true);
+            setShowAuthModal(false);
+          }
+          return;
+        }
+        setShowAuthModal(false);
+      } catch (error: any) {
+        console.error("Error with email signin", error);
+        setAuthError(error.message);
+      }
     }
   };
 
@@ -69,6 +129,47 @@ export default function App() {
   // Render the public SharePage view bypass for guests or users alike
   if (isShareView) {
     return <SharePage />;
+  }
+
+  if (isVerifyView) {
+    return <VerifyEmailPage />;
+  }
+
+  if (verificationSent) {
+    return (
+      <div className="min-h-screen bg-[#0d1117] text-slate-200 font-sans flex flex-col relative overflow-hidden justify-center items-center px-4 selection:bg-[#0095ff]/30 selection:text-white">
+        {/* Background Gradients */}
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full bg-[#0095ff]/8 blur-[130px]"></div>
+          <div className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] rounded-full bg-indigo-500/8 blur-[130px]"></div>
+        </div>
+
+        <div className="max-w-md w-full bg-[#161b22]/90 border border-white/10 p-8 rounded-3xl shadow-2xl shadow-[#0095ff]/15 text-center relative z-10">
+          <div className="w-16 h-16 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-[#0095ff]/5">
+            <Mail className="w-10 h-10 text-[#0095ff]" />
+          </div>
+          <h2 className="text-2xl font-bold text-white tracking-tight mb-4">
+            Verify Your Email
+          </h2>
+          <p className="text-slate-300 mb-6 text-sm leading-relaxed">
+            A verification link has been sent to your Gmail. Please verify it to log in.
+          </p>
+          <div className="text-xs text-slate-400 bg-white/5 border border-white/5 rounded-xl p-3 mb-6 text-left font-mono">
+            Please check your spam or promotions tab if you don't receive it in a few minutes.
+          </div>
+          <button
+            onClick={() => {
+              setVerificationSent(false);
+              setIsSignUp(false);
+              setShowAuthModal(true);
+            }}
+            className="w-full bg-[#0095ff] hover:bg-[#0084e0] active:scale-95 text-white font-bold py-2.5 px-4 rounded-xl cursor-pointer transition-all duration-150"
+          >
+            Back to Login
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (!user) {

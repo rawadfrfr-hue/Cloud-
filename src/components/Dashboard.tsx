@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { auth, db } from "../firebase";
+import { auth, db, handleFirestoreError, OperationType } from "../firebase";
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from "firebase/firestore";
 import NebulaLogo from "./NebulaLogo";
 import { LogOut, Upload, File, FileArchive, Folder, Loader2, Cloud, Search, Trash, Clock, Star, Menu, X, MoreVertical, Link, RefreshCcw, Trash2, StarOff, User as UserIcon, Lock, Eye, EyeOff, FolderPlus, MoveRight, ChevronLeft, Film, FileText, FileAudio, FileVideo, FileImage, FileCode } from "lucide-react";
@@ -81,11 +81,15 @@ export default function Dashboard({ user }: DashboardProps) {
       fileData.sort((a: any, b: any) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
       setFiles(fileData);
       setIsLoadingFiles(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "files");
     });
 
     const unsubscribeFolders = onSnapshot(qFolders, (snapshot) => {
       const folderData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setFolders(folderData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "folders");
     });
 
     return () => {
@@ -109,6 +113,7 @@ export default function Dashboard({ user }: DashboardProps) {
       setNewFolderName("");
     } catch (err) {
       setErrorMsg("Failed to create folder");
+      handleFirestoreError(err, OperationType.CREATE, "folders");
     }
   };
 
@@ -119,6 +124,7 @@ export default function Dashboard({ user }: DashboardProps) {
       setShowMoveModal(null);
     } catch (err) {
       setErrorMsg("Failed to move file");
+      handleFirestoreError(err, OperationType.UPDATE, `files/${fileId}`);
     }
   };
 
@@ -212,19 +218,23 @@ export default function Dashboard({ user }: DashboardProps) {
 
       // 4. Save metadata to Firestore
       setUploadStatus("Saving to database...");
-      await Promise.race([
-        addDoc(collection(db, "files"), {
-          userId: user.uid,
-          folderId: currentFolderId,
-          name: file.name,
-          fileUrl: data.objectKey, // Storing R2 object key here
-          thumbnailUrl: thumbnailUrl,
-          size: file.size,
-          type: file.type || "application/octet-stream",
-          createdAt: serverTimestamp(),
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Database timeout. Check your Firebase connection and Firestore rules.")), 15000))
-      ]);
+      try {
+        await Promise.race([
+          addDoc(collection(db, "files"), {
+            userId: user.uid,
+            folderId: currentFolderId,
+            name: file.name,
+            fileUrl: data.objectKey, // Storing R2 object key here
+            thumbnailUrl: thumbnailUrl,
+            size: file.size,
+            type: file.type || "application/octet-stream",
+            createdAt: serverTimestamp(),
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Database timeout. Check your Firebase connection and Firestore rules.")), 15000))
+        ]);
+      } catch (dbErr) {
+        handleFirestoreError(dbErr, OperationType.CREATE, "files");
+      }
       
       setSuccessMsg(`Successfully uploaded ${file.name}`);
       setTimeout(() => setSuccessMsg(null), 5000);
@@ -273,10 +283,14 @@ export default function Dashboard({ user }: DashboardProps) {
         let savedCount = 0;
         for (const fileData of data.extractedFiles) {
           if (fileData.error) continue; // skip errors
-          await addDoc(collection(db, "files"), {
-            ...fileData,
-            createdAt: serverTimestamp(),
-          });
+          try {
+            await addDoc(collection(db, "files"), {
+              ...fileData,
+              createdAt: serverTimestamp(),
+            });
+          } catch (dbErr) {
+            handleFirestoreError(dbErr, OperationType.CREATE, "files");
+          }
           savedCount++;
         }
         if (savedCount === 0) throw new Error("No files were successfully extracted from the zip.");
@@ -313,6 +327,7 @@ export default function Dashboard({ user }: DashboardProps) {
       setOpenMenuId(null);
     } catch (err: any) {
       setErrorMsg("Failed to update star status");
+      handleFirestoreError(err, OperationType.UPDATE, `files/${fileId}`);
     }
   };
 
@@ -322,6 +337,7 @@ export default function Dashboard({ user }: DashboardProps) {
       setOpenMenuId(null);
     } catch (err: any) {
       setErrorMsg("Failed to move to trash");
+      handleFirestoreError(err, OperationType.UPDATE, `files/${fileId}`);
     }
   };
 
@@ -332,6 +348,7 @@ export default function Dashboard({ user }: DashboardProps) {
       setOpenMenuId(null);
     } catch (err: any) {
       setErrorMsg("Failed to delete file");
+      handleFirestoreError(err, OperationType.DELETE, `files/${fileId}`);
     }
   };
 
@@ -343,6 +360,7 @@ export default function Dashboard({ user }: DashboardProps) {
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: any) {
       setErrorMsg("Failed to update folder trash status");
+      handleFirestoreError(err, OperationType.UPDATE, `folders/${folderId}`);
     }
   };
 
