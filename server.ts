@@ -34,24 +34,36 @@ const PORT = 3000;
 app.use(cors());
 app.use(express.json());
 
-// Initialize Firebase Admin just for Token Verification (No DB access required)
-let projectId = "demo-project";
+// Initialize Firebase Admin for Token Verification
+let projectId = process.env.FIREBASE_PROJECT_ID || "demo-project";
 let credential;
+
 try {
-  const serviceAccountPath = path.join(process.cwd(), "service-account.json");
-  if (fs.existsSync(serviceAccountPath)) {
-    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf8"));
-    credential = cert(serviceAccount);
-    projectId = serviceAccount.project_id;
+  if (process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+    // If running with environment variables (e.g., Railway)
+    credential = cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      // Handle escaped newlines in environment variables
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    });
   } else {
-    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      if (config.projectId) projectId = config.projectId;
+    // Fallback for AI Studio or local development
+    const serviceAccountPath = path.join(process.cwd(), "service-account.json");
+    if (fs.existsSync(serviceAccountPath)) {
+      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf8"));
+      credential = cert(serviceAccount);
+      projectId = serviceAccount.project_id;
+    } else {
+      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        if (config.projectId) projectId = config.projectId;
+      }
     }
   }
 } catch (e) {
-  console.warn("Could not load credentials", e);
+  console.warn("Could not load Firebase credentials", e);
 }
 
 if (!getApps().length) {
@@ -362,7 +374,10 @@ app.post("/api/send-verification", async (req, res) => {
     const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
     
     // Create a link back to our React application's /verify route
-    const link = `${req.headers.origin || 'http://localhost:3000'}/verify?token=${token}`;
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.headers.host;
+    const baseUrl = host ? `${protocol}://${host}` : 'http://localhost:3000';
+    const link = `${baseUrl}/verify?token=${token}`;
 
     const info = await transporter.sendMail({
       from: process.env.EMAIL_USER,
