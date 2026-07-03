@@ -1,17 +1,19 @@
 import { useState, useEffect } from "react";
 import { auth, googleProvider } from "./firebase";
-import { signInWithPopup, User, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification } from "firebase/auth";
+import { signInWithPopup, User as FirebaseUser, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import Dashboard from "./components/Dashboard";
 import SharePage from "./components/SharePage";
+import VerifyEmailPage from "./components/VerifyEmailPage";
 import NebulaLogo from "./components/NebulaLogo";
 import { 
-  Cloud, Loader2, Mail, Lock, Eye, EyeOff, Film, X, Check, Folder, Archive, Shield, Zap, Sparkles, ArrowRight 
+  Cloud, Loader2, Mail, Lock, Eye, EyeOff, Film, X, Check, Folder, Archive, Shield, Zap, Sparkles, ArrowRight, User
 } from "lucide-react";
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
+  const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -21,6 +23,7 @@ export default function App() {
   const [verificationSent, setVerificationSent] = useState(false);
 
   const isShareView = window.location.pathname === "/share";
+  const isVerifyView = window.location.pathname === "/verify";
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -49,6 +52,11 @@ export default function App() {
     setAuthError("");
     
     if (isSignUp) {
+      if (!fullName.trim()) {
+        setAuthError("Full Name is required");
+        return;
+      }
+
       const isGmail = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i.test(email);
       if (!isGmail) {
         setAuthError("Only official Google Gmail accounts (@gmail.com) are allowed.");
@@ -61,21 +69,57 @@ export default function App() {
       }
       
       try {
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        await sendEmailVerification(userCredential.user);
+        const userCred = await createUserWithEmailAndPassword(auth, email, password);
+        
+        if (userCred.user) {
+          await updateProfile(userCred.user, {
+            displayName: fullName.trim()
+          });
+        }
+        
+        // Call our backend to send custom verification email via Nodemailer
+        const response = await fetch("/api/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email })
+        });
+        
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || "Failed to send verification email");
+        }
+
         await auth.signOut();
         setVerificationSent(true);
         setShowAuthModal(false);
       } catch (error: any) {
         console.error("Error with email signup", error);
-        setAuthError(error.message);
+        if (error.code === 'auth/email-already-in-use') {
+           setAuthError("Email is already registered. Please sign in instead.");
+        } else {
+           setAuthError(error.message);
+        }
       }
     } else {
       try {
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         if (!userCredential.user.emailVerified) {
           await auth.signOut();
-          setAuthError("Please verify your email link before logging in.");
+          
+          // Optionally attempt to resend if they try to login again while unverified
+          const response = await fetch("/api/send-verification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email })
+          });
+          
+          if (!response.ok) {
+            const errData = await response.json();
+            setAuthError("Please verify your email. " + (errData.error || "Failed to resend link."));
+          } else {
+            setVerificationSent(true);
+            setShowAuthModal(false);
+          }
           return;
         }
         setShowAuthModal(false);
@@ -97,6 +141,10 @@ export default function App() {
   // Render the public SharePage view bypass for guests or users alike
   if (isShareView) {
     return <SharePage />;
+  }
+
+  if (isVerifyView) {
+    return <VerifyEmailPage />;
   }
 
   if (verificationSent) {
@@ -420,6 +468,19 @@ export default function App() {
               </p>
               
               <form onSubmit={handleEmailAuth} className="flex flex-col gap-4 mb-6">
+                {isSignUp && (
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                    <input 
+                      type="text" 
+                      placeholder="Full Name"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      required
+                      className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#0095ff]/50"
+                    />
+                  </div>
+                )}
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                   <input 

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { auth, db, handleFirestoreError, OperationType } from "../firebase";
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from "firebase/firestore";
 import NebulaLogo from "./NebulaLogo";
-import { LogOut, Upload, File, FileArchive, Folder, Loader2, Cloud, Search, Trash, Clock, Star, Menu, X, MoreVertical, Link, RefreshCcw, Trash2, StarOff, User as UserIcon, Lock, Eye, EyeOff, FolderPlus, MoveRight, ChevronLeft, Film, FileText, FileAudio, FileVideo, FileImage, FileCode } from "lucide-react";
+import { LogOut, Upload, File, FileArchive, Folder, Loader2, Cloud, Search, Trash, Clock, Star, Menu, X, MoreVertical, Link, RefreshCcw, Trash2, StarOff, User as UserIcon, Lock, Eye, EyeOff, FolderPlus, MoveRight, ChevronLeft, Film, FileText, FileAudio, FileVideo, FileImage, FileCode, LayoutGrid, List } from "lucide-react";
 import { User, updatePassword } from "firebase/auth";
 
 const getFileIcon = (fileName: string, fileType: string, className = "w-6 h-6 text-sky-500") => {
@@ -64,6 +64,20 @@ export default function Dashboard({ user }: DashboardProps) {
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [previewFile, setPreviewFile] = useState<any>(null);
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [viewMode, setViewMode] = useState<"grid" | "list">(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("viewMode") as "grid" | "list") || "grid";
+    }
+    return "grid";
+  });
+
+  const handleToggleViewMode = (mode: "grid" | "list") => {
+    setViewMode(mode);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("viewMode", mode);
+    }
+  };
 
   useEffect(() => {
     const qFiles = query(
@@ -108,11 +122,13 @@ export default function Dashboard({ user }: DashboardProps) {
         parentFolderId: currentFolderId || null,
         createdAt: serverTimestamp(),
       });
-      setSuccessMsg("Folder created!");
+      setSuccessMsg("Folder created successfully!");
+      setTimeout(() => setSuccessMsg(null), 3000);
       setIsFolderModalOpen(false);
       setNewFolderName("");
     } catch (err) {
       setErrorMsg("Failed to create folder");
+      setTimeout(() => setErrorMsg(null), 3000);
       handleFirestoreError(err, OperationType.CREATE, "folders");
     }
   };
@@ -120,10 +136,12 @@ export default function Dashboard({ user }: DashboardProps) {
   const handleMoveFile = async (fileId: string, folderId: string | null) => {
     try {
       await updateDoc(doc(db, "files", fileId), { folderId });
-      setSuccessMsg("File moved successfully");
+      setSuccessMsg("File moved successfully!");
+      setTimeout(() => setSuccessMsg(null), 3000);
       setShowMoveModal(null);
     } catch (err) {
       setErrorMsg("Failed to move file");
+      setTimeout(() => setErrorMsg(null), 3000);
       handleFirestoreError(err, OperationType.UPDATE, `files/${fileId}`);
     }
   };
@@ -164,7 +182,7 @@ export default function Dashboard({ user }: DashboardProps) {
       setUploadStatus("Uploading to cloud...");
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        xhr.timeout = 60000; // 60 seconds timeout
+        xhr.timeout = 600000; // 10 minutes timeout for larger files
         
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) {
@@ -258,8 +276,6 @@ export default function Dashboard({ user }: DashboardProps) {
   const handleExtract = async (fileId: string, objectKey: string) => {
     try {
       setExtracting(fileId);
-      setErrorMsg(null);
-      setSuccessMsg(null);
       const token = await user.getIdToken();
       
       const res = await fetch("/api/extract-zip", {
@@ -325,8 +341,11 @@ export default function Dashboard({ user }: DashboardProps) {
     try {
       await updateDoc(doc(db, "files", fileId), { isStarred: !currentStatus });
       setOpenMenuId(null);
+      setSuccessMsg(currentStatus ? "Removed from starred" : "Added to starred!");
+      setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: any) {
       setErrorMsg("Failed to update star status");
+      setTimeout(() => setErrorMsg(null), 3000);
       handleFirestoreError(err, OperationType.UPDATE, `files/${fileId}`);
     }
   };
@@ -335,20 +354,35 @@ export default function Dashboard({ user }: DashboardProps) {
     try {
       await updateDoc(doc(db, "files", fileId), { isTrash: !currentStatus });
       setOpenMenuId(null);
+      setSuccessMsg(currentStatus ? "File restored successfully!" : "File moved to trash");
+      setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: any) {
       setErrorMsg("Failed to move to trash");
+      setTimeout(() => setErrorMsg(null), 3000);
       handleFirestoreError(err, OperationType.UPDATE, `files/${fileId}`);
     }
   };
 
   const handleDeletePermanently = async (fileId: string) => {
     try {
-      await deleteDoc(doc(db, "files", fileId));
-      setSuccessMsg("File deleted permanently");
+      const token = await user.getIdToken();
+      const res = await fetch("/api/delete-file", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ fileId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete file");
+
+      setSuccessMsg("File deleted permanently from R2 bucket and database.");
+      setTimeout(() => setSuccessMsg(null), 3000);
       setOpenMenuId(null);
     } catch (err: any) {
-      setErrorMsg("Failed to delete file");
-      handleFirestoreError(err, OperationType.DELETE, `files/${fileId}`);
+      setErrorMsg(err.message || "Failed to delete file");
+      setTimeout(() => setErrorMsg(null), 4000);
     }
   };
 
@@ -356,22 +390,69 @@ export default function Dashboard({ user }: DashboardProps) {
     try {
       await updateDoc(doc(db, "folders", folderId), { isTrash: !currentStatus });
       setOpenMenuId(null);
-      setSuccessMsg(currentStatus ? "Folder restored successfully" : "Folder moved to trash");
+      setSuccessMsg(currentStatus ? "Folder restored successfully!" : "Folder moved to trash");
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: any) {
       setErrorMsg("Failed to update folder trash status");
+      setTimeout(() => setErrorMsg(null), 3000);
       handleFirestoreError(err, OperationType.UPDATE, `folders/${folderId}`);
     }
   };
 
   const handleDeleteFolderPermanently = async (folderId: string) => {
     try {
-      await deleteDoc(doc(db, "folders", folderId));
-      setSuccessMsg("Folder deleted permanently");
-      setOpenMenuId(null);
+      const token = await user.getIdToken();
+      const res = await fetch("/api/delete-folder", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ folderId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete folder");
+
+      setSuccessMsg("Folder and all nested files deleted permanently.");
       setTimeout(() => setSuccessMsg(null), 3000);
+      setOpenMenuId(null);
     } catch (err: any) {
-      setErrorMsg("Failed to delete folder");
+      setErrorMsg(err.message || "Failed to delete folder");
+      setTimeout(() => setErrorMsg(null), 4000);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    const confirmDelete = window.confirm("Are you absolutely sure you want to permanently delete your account, all folders, and all files from Cloudflare R2 bucket? This action is irreversible.");
+    if (!confirmDelete) return;
+
+    try {
+      setDeletingAccount(true);
+      const token = await user.getIdToken();
+      
+      const res = await fetch("/api/delete-account", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        }
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete account");
+
+      setSuccessMsg("Account and R2 files deleted successfully!");
+      setTimeout(async () => {
+        // Sign out and reload page to redirect to landing
+        await auth.signOut();
+        window.location.reload();
+      }, 1000);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err.message || "Failed to delete account. Please try logging in again first.");
+      setTimeout(() => setErrorMsg(null), 5000);
+    } finally {
+      setDeletingAccount(false);
     }
   };
 
@@ -495,7 +576,8 @@ export default function Dashboard({ user }: DashboardProps) {
         </nav>
         <div className="p-6 space-y-4">
           <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-            <div className="flex justify-between text-xs mb-2">
+            <div className="flex flex-col gap-1 text-xs mb-2">
+              {user.displayName && <span className="text-white font-bold truncate max-w-full" title={user.displayName}>{user.displayName}</span>}
               <span className="text-slate-400 truncate max-w-full" title={user.email || ""}>{user.email}</span>
             </div>
             <button 
@@ -547,8 +629,9 @@ export default function Dashboard({ user }: DashboardProps) {
               <span className="text-[11px] font-bold text-sky-400 uppercase tracking-widest">Server Active: Railway</span>
             </div>
             <div className="flex items-center gap-3">
+              {user.displayName && <span className="text-xs text-slate-300 font-medium hidden sm:inline">{user.displayName}</span>}
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-xs font-bold ring-2 ring-white/10 text-white uppercase">
-                {user.email?.charAt(0) || "U"}
+                {user.displayName?.charAt(0) || user.email?.charAt(0) || "U"}
               </div>
             </div>
           </div>
@@ -624,11 +707,37 @@ export default function Dashboard({ user }: DashboardProps) {
                 )}
               </div>
             </div>
-            <div className="flex gap-3 relative">
+            <div className="flex gap-3 items-center relative">
+              {activeTab !== 'account' && (
+                <div className="flex bg-white/5 border border-white/10 rounded-xl p-0.5 mr-1">
+                  <button
+                    onClick={() => handleToggleViewMode("grid")}
+                    className={`p-2 rounded-lg transition-all cursor-pointer ${
+                      viewMode === "grid" 
+                        ? "bg-white/10 text-sky-400 shadow-md" 
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                    title="Grid View"
+                  >
+                    <LayoutGrid className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => handleToggleViewMode("list")}
+                    className={`p-2 rounded-lg transition-all cursor-pointer ${
+                      viewMode === "list" 
+                        ? "bg-white/10 text-sky-400 shadow-md" 
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                    title="List View"
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
               {activeTab === 'files' && (
                 <button 
                   onClick={() => setIsFolderModalOpen(true)}
-                  className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl flex items-center gap-2 text-sm font-bold text-white transition-all"
+                  className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl flex items-center gap-2 text-sm font-bold text-white transition-all cursor-pointer"
                 >
                   <FolderPlus className="w-4 h-4" />
                   <span className="hidden sm:inline">Create Folder</span>
@@ -663,10 +772,10 @@ export default function Dashboard({ user }: DashboardProps) {
             <div className="max-w-2xl mx-auto w-full bg-white/5 border border-white/10 rounded-3xl p-8 backdrop-blur-md">
               <div className="flex items-center gap-4 mb-8">
                 <div className="w-16 h-16 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-2xl font-bold ring-4 ring-white/10 text-white uppercase">
-                  {user.email?.charAt(0) || "U"}
+                  {user.displayName?.charAt(0) || user.email?.charAt(0) || "U"}
                 </div>
                 <div>
-                  <h3 className="text-xl font-bold text-white">My Account</h3>
+                  <h3 className="text-xl font-bold text-white">{user.displayName || "My Account"}</h3>
                   <p className="text-slate-400">{user.email}</p>
                 </div>
               </div>
@@ -688,19 +797,47 @@ export default function Dashboard({ user }: DashboardProps) {
                   <button type="submit" className="px-6 py-2.5 bg-sky-500 hover:bg-sky-400 text-white font-medium rounded-xl transition-all">Update Password</button>
                 </form>
               </div>
+              <div className="border-t border-white/10 pt-6 mt-8">
+                <h4 className="text-lg font-medium text-rose-400 mb-2">Danger Zone</h4>
+                <p className="text-slate-400 text-xs mb-4">Permanently delete your account and all files stored in your Cloudflare R2 bucket. This action is irreversible.</p>
+                {deletingAccount ? (
+                  <button disabled className="px-6 py-2.5 bg-rose-600/50 text-white font-medium rounded-xl flex items-center gap-2 cursor-not-allowed">
+                    <Loader2 className="w-4 h-4 animate-spin" /> Deleting Account...
+                  </button>
+                ) : (
+                  <button 
+                    onClick={handleDeleteAccount}
+                    className="px-6 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-medium rounded-xl transition-all cursor-pointer"
+                  >
+                    Delete Account Permanently
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+            <div className={viewMode === "grid" ? "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4" : "flex flex-col gap-3 w-full"}>
               {isLoadingFiles ? (
                 <>
                   {[1,2,3,4].map((n) => (
-                    <div key={n} className="bg-white/5 border border-white/10 rounded-2xl p-5 animate-pulse h-32 flex flex-col justify-between">
-                      <div className="w-12 h-12 bg-white/10 rounded-xl"></div>
-                      <div className="space-y-2">
-                        <div className="h-4 bg-white/10 rounded w-3/4"></div>
-                        <div className="h-3 bg-white/10 rounded w-1/2"></div>
+                    viewMode === "grid" ? (
+                      <div key={n} className="bg-white/5 border border-white/10 rounded-2xl p-5 animate-pulse h-32 flex flex-col justify-between">
+                        <div className="w-12 h-12 bg-white/10 rounded-xl"></div>
+                        <div className="space-y-2">
+                          <div className="h-4 bg-white/10 rounded w-3/4"></div>
+                          <div className="h-3 bg-white/10 rounded w-1/2"></div>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div key={n} className="bg-white/5 border border-white/10 rounded-2xl p-4 animate-pulse flex items-center justify-between w-full">
+                        <div className="flex items-center flex-1">
+                          <div className="w-12 h-12 bg-white/10 rounded-xl mr-4"></div>
+                          <div className="space-y-2 flex-1 max-w-xs">
+                            <div className="h-4 bg-white/10 rounded w-3/4"></div>
+                            <div className="h-3 bg-white/10 rounded w-1/2"></div>
+                          </div>
+                        </div>
+                      </div>
+                    )
                   ))}
                 </>
               ) : (
@@ -715,14 +852,14 @@ export default function Dashboard({ user }: DashboardProps) {
                           setCurrentFolderId(null);
                         }
                       }}
-                      className="group bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl p-5 transition-all flex items-center gap-4 cursor-pointer relative"
+                      className={`group bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl transition-all flex items-center cursor-pointer relative ${viewMode === 'grid' ? 'p-3 flex-col justify-center text-center aspect-[16/10] gap-1' : 'p-4 w-full gap-4'}`}
                     >
-                      <div className="w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center">
-                        <ChevronLeft className="w-6 h-6 text-slate-400 group-hover:text-white transition-colors" />
+                      <div className={viewMode === 'grid' ? "w-9 h-9 bg-white/10 rounded-xl flex items-center justify-center shrink-0" : "w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center shrink-0"}>
+                        <ChevronLeft className={viewMode === 'grid' ? "w-5 h-5 text-slate-400 group-hover:text-white transition-colors" : "w-6 h-6 text-slate-400 group-hover:text-white transition-colors"} />
                       </div>
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-slate-300 group-hover:text-white transition-colors text-base">Back</h3>
-                        <p className="text-xs text-slate-500 mt-1">Go up one level</p>
+                      <div className={viewMode === 'grid' ? "w-full text-center shrink-0" : "flex-1"}>
+                        <h3 className="font-semibold text-slate-300 group-hover:text-white transition-colors text-xs">Back</h3>
+                        {viewMode !== 'grid' && <p className="text-xs text-slate-500 mt-1">Go up one level</p>}
                       </div>
                     </div>
                   )}
@@ -731,23 +868,23 @@ export default function Dashboard({ user }: DashboardProps) {
                     <div 
                       key={folder.id} 
                       onClick={() => setCurrentFolderId(folder.id)}
-                      className="group bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl p-5 transition-all flex items-center gap-4 cursor-pointer relative"
+                      className={`group bg-indigo-500/[0.03] hover:bg-indigo-500/[0.08] border border-indigo-500/20 rounded-2xl transition-all flex items-center cursor-pointer relative ${viewMode === 'grid' ? 'p-3 flex-col justify-center text-center aspect-[16/10] gap-1' : 'p-4 w-full gap-4'}`}
                     >
-                      <div className="w-12 h-12 bg-indigo-500/20 rounded-xl flex items-center justify-center">
-                        <Folder className="w-6 h-6 text-indigo-400" />
+                      <div className={viewMode === 'grid' ? "w-9 h-9 bg-indigo-500/10 rounded-xl flex items-center justify-center shrink-0" : "w-12 h-12 bg-indigo-500/20 rounded-xl flex items-center justify-center shrink-0"}>
+                        <Folder className={viewMode === 'grid' ? "w-5 h-5 text-indigo-400" : "w-6 h-6 text-indigo-400"} />
                       </div>
-                      <div className="flex-1 truncate pr-8">
-                        <h3 className="font-semibold text-white truncate text-base">{folder.name}</h3>
-                        <p className="text-xs text-slate-400 mt-1">Folder</p>
+                      <div className={viewMode === 'grid' ? "w-full text-center px-1.5 shrink-0 min-w-0" : "flex-1 truncate pr-8 min-w-0"}>
+                        <h3 className="font-semibold text-white truncate text-xs" title={folder.name}>{folder.name}</h3>
+                        {viewMode !== 'grid' && <p className="text-xs text-slate-400 mt-1">Folder</p>}
                       </div>
 
                       {/* 3 dots menu button */}
-                      <div className="absolute top-1/2 -translate-y-1/2 right-4 z-20" onClick={(e) => e.stopPropagation()}>
+                      <div className={`absolute z-20 ${viewMode === 'grid' ? 'top-3 right-1.5' : 'top-1/2 -translate-y-1/2 right-4'}`} onClick={(e) => e.stopPropagation()}>
                         <button 
                           onClick={() => setOpenMenuId(openMenuId === folder.id ? null : folder.id)}
-                          className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-slate-300 hover:text-white transition-colors cursor-pointer"
+                          className={viewMode === 'grid' ? "p-1 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer" : "p-2 bg-white/5 hover:bg-white/10 rounded-full text-slate-300 hover:text-white transition-colors cursor-pointer"}
                         >
-                          <MoreVertical className="w-4 h-4" />
+                          <MoreVertical className={viewMode === 'grid' ? "w-3.5 h-3.5" : "w-4 h-4"} />
                         </button>
                         
                         {openMenuId === folder.id && (
@@ -764,26 +901,26 @@ export default function Dashboard({ user }: DashboardProps) {
                     </div>
                   ))}
 
-                  {activeTab === 'trash' && folders.filter(folder => folder.isTrash).map(folder => (
+                   {activeTab === 'trash' && folders.filter(folder => folder.isTrash).map(folder => (
                     <div 
                       key={folder.id} 
-                      className="group bg-white/5 border border-white/10 rounded-2xl p-5 transition-all flex items-center gap-4 relative"
+                      className={`group bg-white/5 border border-white/10 rounded-2xl transition-all flex items-center cursor-pointer relative ${viewMode === 'grid' ? 'p-3 flex-col justify-center text-center aspect-[16/10] gap-1' : 'p-4 w-full gap-4'}`}
                     >
-                      <div className="w-12 h-12 bg-rose-500/10 rounded-xl flex items-center justify-center">
-                        <Folder className="w-6 h-6 text-rose-400" />
+                      <div className={viewMode === 'grid' ? "w-9 h-9 bg-rose-500/10 rounded-xl flex items-center justify-center shrink-0" : "w-12 h-12 bg-rose-500/10 rounded-xl flex items-center justify-center shrink-0"}>
+                        <Folder className={viewMode === 'grid' ? "w-5 h-5 text-rose-400" : "w-6 h-6 text-rose-400"} />
                       </div>
-                      <div className="flex-1 truncate pr-8">
-                        <h3 className="font-semibold text-white truncate text-base">{folder.name}</h3>
-                        <p className="text-xs text-rose-400/80 mt-1">Folder (In Trash)</p>
+                      <div className={viewMode === 'grid' ? "w-full text-center px-1.5 shrink-0 min-w-0" : "flex-1 truncate pr-8 min-w-0"}>
+                        <h3 className="font-semibold text-white truncate text-xs" title={folder.name}>{folder.name}</h3>
+                        {viewMode !== 'grid' && <p className="text-xs text-rose-400/80 mt-1">Folder (In Trash)</p>}
                       </div>
 
                       {/* 3 dots menu button */}
-                      <div className="absolute top-1/2 -translate-y-1/2 right-4 z-20" onClick={(e) => e.stopPropagation()}>
+                      <div className={`absolute z-20 ${viewMode === 'grid' ? 'top-3 right-1.5' : 'top-1/2 -translate-y-1/2 right-4'}`} onClick={(e) => e.stopPropagation()}>
                         <button 
                           onClick={() => setOpenMenuId(openMenuId === folder.id ? null : folder.id)}
-                          className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-slate-300 hover:text-white transition-colors cursor-pointer"
+                          className={viewMode === 'grid' ? "p-1 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer" : "p-2 bg-white/5 hover:bg-white/10 rounded-full text-slate-300 hover:text-white transition-colors cursor-pointer"}
                         >
-                          <MoreVertical className="w-4 h-4" />
+                          <MoreVertical className={viewMode === 'grid' ? "w-3.5 h-3.5" : "w-4 h-4"} />
                         </button>
                         
                         {openMenuId === folder.id && (
@@ -819,15 +956,15 @@ export default function Dashboard({ user }: DashboardProps) {
                 const zip = isZip(file.name, file.type);
                 
                 const FileMenu = ({ file }: { file: any }) => (
-                  <div className="absolute top-4 right-4 z-20" onClick={(e) => e.stopPropagation()}>
+                  <div className={`absolute z-20 ${viewMode === 'grid' ? 'top-3 right-2' : 'top-1/2 -translate-y-1/2 right-4'}`} onClick={(e) => e.stopPropagation()}>
                     <button 
                       onClick={(e) => {
                         e.stopPropagation();
                         setOpenMenuId(openMenuId === file.id ? null : file.id);
                       }}
-                      className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-slate-300 hover:text-white transition-colors cursor-pointer"
+                      className={viewMode === 'grid' ? "p-1 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer" : "p-2 bg-white/5 hover:bg-white/10 rounded-full text-slate-300 hover:text-white transition-colors cursor-pointer"}
                     >
-                      <MoreVertical className="w-5 h-5" />
+                      <MoreVertical className={viewMode === 'grid' ? "w-3.5 h-3.5" : "w-5 h-5"} />
                     </button>
                     
                     {openMenuId === file.id && (
@@ -887,76 +1024,170 @@ export default function Dashboard({ user }: DashboardProps) {
                 );
                 
                 if (zip) {
-                  return (
-                    <div key={file.id} className={`col-span-1 md:col-span-2 xl:col-span-2 bg-white/5 border border-sky-500/30 rounded-3xl p-6 relative flex flex-col justify-between group shadow-2xl shadow-sky-900/20 backdrop-blur-3xl transition-all hover:bg-white/10 ${openMenuId === file.id ? "z-30" : "z-10"}`}>
-                      <FileMenu file={file} />
-                      <div className="flex justify-between items-start pr-10">
-                        <div>
-                          <div className="w-16 h-16 bg-gradient-to-br from-sky-400 to-indigo-600 rounded-2xl flex items-center justify-center mb-6 shadow-xl shadow-sky-500/20">
-                            <FileArchive className="w-8 h-8 text-white" />
+                  if (viewMode === "grid") {
+                    return (
+                      <div key={file.id} className={`group bg-white/[0.04] hover:bg-white/[0.08] border border-sky-500/20 rounded-2xl p-3.5 relative transition-all flex flex-col justify-between overflow-visible ${openMenuId === file.id ? "z-30" : "z-10"}`}>
+                        <FileMenu file={file} />
+                        <div className="relative z-10 cursor-pointer flex flex-col" onClick={() => setPreviewFile(file)}>
+                          {/* Header info (Icon and Text) */}
+                          <div className="flex items-start gap-1.5 pr-6 mb-3 min-w-0">
+                            <div className="shrink-0 mt-0.5">
+                              <FileArchive className="w-4 h-4 text-sky-400" />
+                            </div>
+                            <div className="font-semibold text-slate-200 text-xs line-clamp-2 leading-tight break-all" title={file.name}>
+                              {file.name}
+                            </div>
                           </div>
-                          <h3 className="text-lg font-bold text-white mb-2 truncate max-w-[250px] sm:max-w-[400px]" title={file.name}>{file.name}</h3>
-                          <div className="flex items-center gap-3 mt-4">
-                            <div className="px-3 py-1 bg-white/5 rounded-lg border border-white/10 text-[11px] font-medium text-slate-300">{formatSize(file.size)}</div>
-                            <div className="px-3 py-1 bg-white/5 rounded-lg border border-white/10 text-[11px] font-medium text-sky-300">ZIP ARCHIVE</div>
+
+                          {/* ZIP Placeholder with hover action */}
+                          <div className="w-full aspect-[16/10] bg-gradient-to-br from-sky-500/10 to-indigo-500/10 rounded-xl flex flex-col items-center justify-center border border-sky-500/10 shadow-inner gap-1 group/btn relative">
+                            <FileArchive className="w-8 h-8 text-sky-400/80 group-hover/btn:scale-110 transition-transform" />
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleExtract(file.id, file.fileUrl);
+                              }}
+                              disabled={extracting === file.id}
+                              className="absolute inset-0 bg-slate-950/80 rounded-xl opacity-0 group-hover/btn:opacity-100 flex items-center justify-center transition-all text-[11px] font-bold text-white cursor-pointer disabled:opacity-50"
+                            >
+                              {extracting === file.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-400" />
+                              ) : (
+                                "Extract"
+                              )}
+                            </button>
+                          </div>
+                          
+                          <div className="text-[10px] text-slate-500 mt-2 font-mono flex justify-between items-center px-0.5">
+                            <span>{formatSize(file.size)}</span>
+                            <span className="text-[9px] text-sky-400/80 font-bold">ZIP</span>
                           </div>
                         </div>
                       </div>
-                      
-                      <div className="mt-8 pt-6 border-t border-white/10 flex items-center justify-end">
-                        <button
-                          onClick={() => handleExtract(file.id, file.fileUrl)}
-                          disabled={extracting === file.id}
-                          className="px-6 py-2.5 bg-sky-500 hover:bg-sky-400 text-white rounded-xl font-bold shadow-lg shadow-sky-500/20 flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {extracting === file.id ? (
-                            <>
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                              <span>Extracting...</span>
-                            </>
-                          ) : (
-                            <>
-                              <span>Extract Online</span>
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                            </>
-                          )}
-                        </button>
+                    );
+                  } else {
+                    return (
+                      <div key={file.id} className={`group bg-white/5 border border-sky-500/30 hover:bg-white/10 rounded-2xl p-4 relative flex items-center justify-between w-full shadow-lg shadow-sky-950/25 transition-all ${openMenuId === file.id ? "z-30" : "z-10"}`}>
+                        <div className="flex items-center flex-1 pr-12 cursor-pointer" onClick={() => setPreviewFile(file)}>
+                          <div className="w-12 h-12 bg-gradient-to-br from-sky-400 to-indigo-600 rounded-xl flex items-center justify-center shrink-0 mr-4 shadow-md">
+                            <FileArchive className="w-6 h-6 text-white" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h3 className="font-semibold text-white truncate text-sm" title={file.name}>{file.name}</h3>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-xs text-slate-400">{formatSize(file.size)}</span>
+                              <span className="text-slate-700">•</span>
+                              <span className="px-2 py-0.5 bg-sky-500/10 rounded border border-sky-500/20 text-[9px] font-bold text-sky-300">ZIP ARCHIVE</span>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center gap-2 mr-10">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleExtract(file.id, file.fileUrl); }}
+                            disabled={extracting === file.id}
+                            className="px-4 py-1.5 bg-sky-500 hover:bg-sky-400 text-white rounded-xl font-bold text-xs shadow-lg shadow-sky-500/20 flex items-center gap-1.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            {extracting === file.id ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span>Extracting...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>Extract Online</span>
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <FileMenu file={file} />
                       </div>
-                    </div>
-                  );
+                    );
+                  }
                 }
 
                 // Regular File
-                return (
-                  <div key={file.id} className={`group bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl p-5 relative transition-all flex flex-col justify-between overflow-visible ${openMenuId === file.id ? "z-30" : "z-10"}`}>
-                    <FileMenu file={file} />
-                    <div className="pr-10 relative z-10 cursor-pointer" onClick={() => setPreviewFile(file)}>
-                      {file.thumbnailUrl ? (
-                        <div className="w-16 h-16 rounded-xl overflow-hidden mb-4 border border-white/10 shadow-lg relative">
-                          <img 
-                            src={`/api/download?key=${encodeURIComponent(file.thumbnailUrl)}`}
-                            onError={(e) => {
-                              // Fallback if image fails to load
-                              (e.target as HTMLImageElement).style.display = 'none';
-                              (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
-                            }}
-                            alt="thumbnail" 
-                            className="w-full h-full object-cover" 
-                          />
-                          <div className="hidden absolute inset-0 bg-sky-500/20 flex items-center justify-center">
-                             {getFileIcon(file.name, file.type, "w-6 h-6 text-sky-500")}
+                if (viewMode === "grid") {
+                  return (
+                    <div key={file.id} className={`group bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 rounded-2xl p-3.5 relative transition-all flex flex-col justify-between overflow-visible ${openMenuId === file.id ? "z-30" : "z-10"}`}>
+                      <FileMenu file={file} />
+                      <div className="relative z-10 cursor-pointer flex flex-col" onClick={() => setPreviewFile(file)}>
+                        {/* Header info (Icon and Text) */}
+                        <div className="flex items-start gap-1.5 pr-6 mb-3 min-w-0">
+                          <div className="shrink-0 mt-0.5">
+                            {getFileIcon(file.name, file.type, "w-4 h-4 text-rose-400")}
+                          </div>
+                          <div className="font-semibold text-slate-200 text-xs line-clamp-2 leading-tight break-all" title={file.name}>
+                            {file.name}
                           </div>
                         </div>
-                      ) : (
-                        <div className="w-12 h-12 bg-sky-500/20 rounded-xl flex items-center justify-center mb-4">
-                          {getFileIcon(file.name, file.type, "w-6 h-6 text-sky-500")}
+
+                        {/* Thumbnail or placeholder */}
+                        {file.thumbnailUrl ? (
+                          <div className="w-full aspect-[16/10] rounded-xl overflow-hidden border border-white/5 shadow-lg relative bg-black/20 flex items-center justify-center">
+                            <img 
+                              src={`/api/download?key=${encodeURIComponent(file.thumbnailUrl)}`}
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).style.display = 'none';
+                                (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                              }}
+                              alt="thumbnail" 
+                              className="w-full h-full object-cover" 
+                            />
+                            <div className="hidden absolute inset-0 bg-sky-500/20 flex items-center justify-center">
+                               {getFileIcon(file.name, file.type, "w-6 h-6 text-sky-500")}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="w-full aspect-[16/10] bg-white/[0.02] rounded-xl flex items-center justify-center border border-white/5 shadow-inner">
+                            {getFileIcon(file.name, file.type, "w-8 h-8 opacity-40")}
+                          </div>
+                        )}
+                        
+                        <div className="text-[10px] text-slate-500 mt-2 font-mono flex justify-between items-center px-0.5">
+                          <span>{formatSize(file.size)}</span>
                         </div>
-                      )}
-                      <div className="font-semibold text-white truncate" title={file.name}>{file.name}</div>
-                      <div className="text-xs text-slate-500 mt-1">{formatSize(file.size)}</div>
+                      </div>
                     </div>
-                  </div>
-                );
+                  );
+                } else {
+                  return (
+                    <div key={file.id} className={`group bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl p-4 relative transition-all flex items-center justify-between overflow-visible w-full cursor-pointer ${openMenuId === file.id ? "z-30" : "z-10"}`}>
+                      <div className="flex items-center flex-1 pr-12 cursor-pointer" onClick={() => setPreviewFile(file)}>
+                        {file.thumbnailUrl ? (
+                          <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/10 shadow-lg relative bg-white/5 shrink-0 mr-4 flex items-center justify-center">
+                            <img 
+                              src={`/api/download?key=${encodeURIComponent(file.thumbnailUrl)}`}
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).style.display = 'none';
+                                (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                              }}
+                              alt="thumbnail" 
+                              className="w-full h-full object-cover" 
+                            />
+                            <div className="hidden absolute inset-0 bg-sky-500/20 flex items-center justify-center">
+                               {getFileIcon(file.name, file.type, "w-5 h-5 text-sky-500")}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="w-12 h-12 bg-sky-500/10 rounded-lg flex items-center justify-center border border-white/5 shadow-inner shrink-0 mr-4">
+                            {getFileIcon(file.name, file.type, "w-6 h-6 text-sky-500")}
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-white truncate text-sm" title={file.name}>{file.name}</div>
+                          <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                            <span>{formatSize(file.size)}</span>
+                            <span className="text-slate-700">•</span>
+                            <span className="uppercase text-[9px] font-bold tracking-wider text-sky-400/80">{file.type || 'file'}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <FileMenu file={file} />
+                    </div>
+                  );
+                }
               })
             )}
             </>

@@ -2,11 +2,12 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import AdmZip from "adm-zip";
-import { initializeApp, getApps } from "firebase-admin/app";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getFirestore as getAdminFirestore } from "firebase-admin/firestore";
 import { Upload } from "@aws-sdk/lib-storage";
 import { Readable, PassThrough } from "stream";
 import fs from "fs";
@@ -14,9 +15,15 @@ import os from "os";
 import sharp from "sharp";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegStatic from "ffmpeg-static";
+import nodemailer from "nodemailer";
+import jwt from "jsonwebtoken";
 
-// Set ffmpeg path
-if (ffmpegStatic) {
+const JWT_SECRET = process.env.JWT_SECRET || "your-secure-jwt-secret-key-123";
+
+// Set ffmpeg path - prefer native system ffmpeg to avoid SIGSEGV crashes with precompiled static binaries
+if (fs.existsSync("/usr/bin/ffmpeg")) {
+  ffmpeg.setFfmpegPath("/usr/bin/ffmpeg");
+} else if (ffmpegStatic) {
   ffmpeg.setFfmpegPath(ffmpegStatic);
 }
 
@@ -27,24 +34,73 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
+app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
 
-// Initialize Firebase Admin just for Token Verification (No DB access required)
-let projectId = "demo-project";
+// Initialize Firebase Admin for Token Verification
+let projectId = process.env.FIREBASE_PROJECT_ID || "demo-project";
+let credential;
+
+try {
+  if (process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+    // If running with environment variables (e.g., Railway)
+    credential = cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      // Handle escaped newlines in environment variables
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    });
+  } else {
+    // Fallback for AI Studio or local development
+    const serviceAccountPath = path.join(process.cwd(), "service-account.json");
+    if (fs.existsSync(serviceAccountPath)) {
+      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf8"));
+      credential = cert(serviceAccount);
+      projectId = serviceAccount.project_id;
+    } else {
+      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        if (config.projectId) projectId = config.projectId;
+      }
+    }
+  }
+} catch (e) {
+  console.warn("Could not load Firebase credentials", e);
+}
+
+if (!getApps().length) {
+  initializeApp({
+    projectId,
+    ...(credential ? { credential } : {})
+  });
+}
+
+// Retrieve Firestore database ID from config or use default fallback
+let firestoreDbId = "ai-studio-00210eb5-c682-4dfe-a3a4-fee2eb2f393a";
 try {
   const configPath = path.join(process.cwd(), "firebase-applet-config.json");
   if (fs.existsSync(configPath)) {
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    if (config.projectId) projectId = config.projectId;
+    if (config.firestoreDatabaseId) {
+      firestoreDbId = config.firestoreDatabaseId;
+    }
   }
-} catch (e) {
-  console.warn("Could not load firebase-applet-config.json", e);
+} catch (err) {
+  console.warn("Failed to read database ID from config", err);
 }
 
-if (!getApps().length) {
-  initializeApp({ projectId });
-}
+const dbAdmin = getAdminFirestore(getApps()[0], firestoreDbId);
+
+// Nodemailer transport setup
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 
 // S3 Client for Cloudflare R2
 let s3Client: S3Client | null = null;
@@ -323,6 +379,250 @@ app.post("/api/extract-zip", verifyAuth, async (req, res) => {
   } catch (error: any) {
     console.error("Error extracting ZIP:", error);
     res.status(500).json({ error: error.message || "Failed to extract ZIP" });
+  }
+});
+
+// Endpoint to send custom verification email via Nodemailer
+app.post("/api/send-verification", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "'email' is required" });
+    }
+
+    // Generate a custom JWT for verification, avoiding Firebase's default link
+    const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
+    
+    // Create a link back to our React application's /verify route
+    const rawProto = req.headers['x-forwarded-proto'] || req.protocol;
+    const protocol = typeof rawProto === 'string' ? rawProto.split(',')[0].trim() : 'http';
+    const rawHost = req.headers['x-forwarded-host'] || req.headers.host;
+    const host = typeof rawHost === 'string' ? rawHost.split(',')[0].trim() : 'localhost:3000';
+    const baseUrl = `${protocol}://${host}`;
+    const link = `${baseUrl}/verify?token=${token}`;
+
+    const info = await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: email,
+      subject: "Verify your email for Nebula Drive",
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2>Welcome to Nebula Drive!</h2>
+          <p>Please verify your email address by clicking the button below:</p>
+          <a href="${link}" style="display: inline-block; padding: 10px 20px; background-color: #0095ff; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px; margin-bottom: 20px;">
+            Verify Email
+          </a>
+          <p style="color: #666; font-size: 14px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
+          <p style="color: #666; font-size: 14px; word-break: break-all;">${link}</p>
+        </div>
+      `,
+    });
+
+    res.json({ success: true, message: "Verification email sent successfully", data: info });
+  } catch (error: any) {
+    console.error("Error sending verification email:", error);
+    res.status(500).json({ error: error.message || "Failed to send verification email" });
+  }
+});
+
+// Endpoint to verify the custom email token
+app.post("/api/verify-email", async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) {
+      return res.status(400).json({ error: "Token is required" });
+    }
+
+    // Verify token
+    const decoded = jwt.verify(token, JWT_SECRET) as { email: string };
+    const email = decoded.email;
+
+    // Use Firebase Admin only to mark the user as verified
+    const user = await getAuth().getUserByEmail(email);
+    await getAuth().updateUser(user.uid, { emailVerified: true });
+
+    res.json({ success: true, message: "Email verified successfully" });
+  } catch (error: any) {
+    console.error("Verification error:", error);
+    res.status(400).json({ error: "Invalid or expired token" });
+  }
+});
+
+// Helper to delete a single object from Cloudflare R2
+async function deleteFromR2(key: string) {
+  try {
+    const s3 = getS3Client();
+    const bucket = getBucketName();
+    const command = new DeleteObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    });
+    await s3.send(command);
+    console.log(`Successfully deleted key from R2: ${key}`);
+  } catch (error) {
+    console.error(`Failed to delete key from R2: ${key}`, error);
+  }
+}
+
+// Helper to list and delete all objects with a specific user prefix from R2 (safety net)
+async function deleteUserFolderFromR2(userId: string) {
+  try {
+    const s3 = getS3Client();
+    const bucket = getBucketName();
+    const prefix = `${userId}/`;
+
+    // List all objects with prefix
+    const listCommand = new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: prefix,
+    });
+    const listResponse = await s3.send(listCommand);
+
+    if (listResponse.Contents && listResponse.Contents.length > 0) {
+      const objectsToDelete = listResponse.Contents.map(obj => ({ Key: obj.Key! }));
+      
+      // S3 DeleteObjects allows up to 1000 keys at once
+      const deleteCommand = new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: {
+          Objects: objectsToDelete,
+          Quiet: true,
+        },
+      });
+      await s3.send(deleteCommand);
+      console.log(`Successfully deleted all ${objectsToDelete.length} objects with prefix ${prefix} from R2.`);
+    } else {
+      console.log(`No objects found in R2 with prefix ${prefix}.`);
+    }
+  } catch (error) {
+    console.error(`Failed to delete user prefix folder ${userId}/ from R2`, error);
+  }
+}
+
+// Secure Endpoint to Delete a File from R2 and Firestore
+app.post("/api/delete-file", verifyAuth, async (req, res) => {
+  try {
+    const userId = (req as any).user.uid;
+    const { fileId } = req.body;
+
+    if (!fileId) {
+      return res.status(400).json({ error: "fileId is required" });
+    }
+
+    const fileDocRef = dbAdmin.collection("files").doc(fileId);
+    const fileDoc = await fileDocRef.get();
+
+    if (!fileDoc.exists) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    const fileData = fileDoc.data();
+    if (!fileData || fileData.userId !== userId) {
+      return res.status(403).json({ error: "Unauthorized to delete this file" });
+    }
+
+    // 1. Delete main file from R2
+    if (fileData.fileUrl) {
+      await deleteFromR2(fileData.fileUrl);
+    }
+
+    // 2. Delete thumbnail from R2 if exists
+    if (fileData.thumbnailUrl) {
+      await deleteFromR2(fileData.thumbnailUrl);
+    }
+
+    // 3. Delete document from Firestore
+    await fileDocRef.delete();
+
+    res.json({ success: true, message: "File deleted successfully from R2 and database." });
+  } catch (error: any) {
+    console.error("Error deleting file:", error);
+    res.status(500).json({ error: error.message || "Failed to delete file" });
+  }
+});
+
+// Secure Endpoint to Delete a Folder and all of its nested files
+app.post("/api/delete-folder", verifyAuth, async (req, res) => {
+  try {
+    const userId = (req as any).user.uid;
+    const { folderId } = req.body;
+
+    if (!folderId) {
+      return res.status(400).json({ error: "folderId is required" });
+    }
+
+    const folderDocRef = dbAdmin.collection("folders").doc(folderId);
+    const folderDoc = await folderDocRef.get();
+
+    if (!folderDoc.exists) {
+      return res.status(404).json({ error: "Folder not found" });
+    }
+
+    const folderData = folderDoc.data();
+    if (!folderData || folderData.userId !== userId) {
+      return res.status(403).json({ error: "Unauthorized to delete this folder" });
+    }
+
+    // Find and delete all files directly inside this folder
+    const filesSnapshot = await dbAdmin.collection("files")
+      .where("userId", "==", userId)
+      .where("folderId", "==", folderId)
+      .get();
+
+    for (const fileDoc of filesSnapshot.docs) {
+      const fileData = fileDoc.data();
+      if (fileData.fileUrl) {
+        await deleteFromR2(fileData.fileUrl);
+      }
+      if (fileData.thumbnailUrl) {
+        await deleteFromR2(fileData.thumbnailUrl);
+      }
+      await fileDoc.ref.delete();
+    }
+
+    // Delete the folder itself
+    await folderDocRef.delete();
+
+    res.json({ success: true, message: "Folder and all associated files deleted successfully." });
+  } catch (error: any) {
+    console.error("Error deleting folder:", error);
+    res.status(500).json({ error: error.message || "Failed to delete folder" });
+  }
+});
+
+// Secure Endpoint to Delete User Account, Firestore metadata, physical files from R2, and Firebase Auth record
+app.post("/api/delete-account", verifyAuth, async (req, res) => {
+  try {
+    const userId = (req as any).user.uid;
+
+    // 1. Delete all file metadata from Firestore
+    const filesSnapshot = await dbAdmin.collection("files")
+      .where("userId", "==", userId)
+      .get();
+
+    for (const fileDoc of filesSnapshot.docs) {
+      await fileDoc.ref.delete();
+    }
+
+    // 2. Delete all folders from Firestore
+    const foldersSnapshot = await dbAdmin.collection("folders")
+      .where("userId", "==", userId)
+      .get();
+
+    for (const folderDoc of foldersSnapshot.docs) {
+      await folderDoc.ref.delete();
+    }
+
+    // 3. Delete all physical files from R2 (including uploads, thumbnails, etc.)
+    await deleteUserFolderFromR2(userId);
+
+    // 4. Delete user account from Firebase Auth
+    await getAuth().deleteUser(userId);
+
+    res.json({ success: true, message: "Your account and all associated files have been permanently deleted." });
+  } catch (error: any) {
+    console.error("Error deleting user account:", error);
+    res.status(500).json({ error: error.message || "Failed to delete account" });
   }
 });
 
