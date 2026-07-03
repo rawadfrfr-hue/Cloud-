@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { auth, googleProvider } from "./firebase";
-import { signInWithPopup, User as FirebaseUser, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import { signInWithPopup, User as FirebaseUser, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from "firebase/auth";
 import Dashboard from "./components/Dashboard";
 import SharePage from "./components/SharePage";
 import VerifyEmailPage from "./components/VerifyEmailPage";
@@ -21,6 +21,7 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [verificationSent, setVerificationSent] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
 
   const isShareView = window.location.pathname === "/share";
   const isVerifyView = window.location.pathname === "/verify";
@@ -50,21 +51,25 @@ export default function App() {
   const handleEmailAuth = async (e: import("react").FormEvent) => {
     e.preventDefault();
     setAuthError("");
+    setAuthLoading(true);
     
     if (isSignUp) {
       if (!fullName.trim()) {
         setAuthError("Full Name is required");
+        setAuthLoading(false);
         return;
       }
 
       const isGmail = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i.test(email);
       if (!isGmail) {
         setAuthError("Only official Google Gmail accounts (@gmail.com) are allowed.");
+        setAuthLoading(false);
         return;
       }
       
       if (password !== confirmPassword) {
         setAuthError("Passwords do not match");
+        setAuthLoading(false);
         return;
       }
       
@@ -75,20 +80,10 @@ export default function App() {
           await updateProfile(userCred.user, {
             displayName: fullName.trim()
           });
+          // Send native Firebase verification email
+          await sendEmailVerification(userCred.user);
         }
         
-        // Call our backend to send custom verification email via Nodemailer
-        const response = await fetch("/api/send-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email })
-        });
-        
-        if (!response.ok) {
-          const errData = await response.json();
-          throw new Error(errData.error || "Failed to send verification email");
-        }
-
         await auth.signOut();
         setVerificationSent(true);
         setShowAuthModal(false);
@@ -99,33 +94,26 @@ export default function App() {
         } else {
            setAuthError(error.message);
         }
+      } finally {
+        setAuthLoading(false);
       }
     } else {
       try {
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         if (!userCredential.user.emailVerified) {
+          // Send native Firebase verification email
+          await sendEmailVerification(userCredential.user);
           await auth.signOut();
-          
-          // Optionally attempt to resend if they try to login again while unverified
-          const response = await fetch("/api/send-verification", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email })
-          });
-          
-          if (!response.ok) {
-            const errData = await response.json();
-            setAuthError("Please verify your email. " + (errData.error || "Failed to resend link."));
-          } else {
-            setVerificationSent(true);
-            setShowAuthModal(false);
-          }
+          setVerificationSent(true);
+          setShowAuthModal(false);
           return;
         }
         setShowAuthModal(false);
       } catch (error: any) {
         console.error("Error with email signin", error);
         setAuthError(error.message);
+      } finally {
+        setAuthLoading(false);
       }
     }
   };
@@ -166,9 +154,11 @@ export default function App() {
           <p className="text-slate-300 mb-6 text-sm leading-relaxed">
             A verification link has been sent to your Gmail. Please verify it to log in.
           </p>
+
           <div className="text-xs text-slate-400 bg-white/5 border border-white/5 rounded-xl p-3 mb-6 text-left font-mono">
             Please check your spam or promotions tab if you don't receive it in a few minutes.
           </div>
+
           <button
             onClick={() => {
               setVerificationSent(false);
@@ -526,8 +516,10 @@ export default function App() {
                 {authError && <div className="text-rose-400 text-xs text-left">{authError}</div>}
                 <button 
                   type="submit"
-                  className="w-full bg-[#0095ff] hover:bg-[#0084e0] active:scale-98 shadow-lg shadow-[#0095ff]/20 text-white font-bold py-2.5 px-4 rounded-xl cursor-pointer transition-all duration-150"
+                  disabled={authLoading}
+                  className="w-full bg-[#0095ff] hover:bg-[#0084e0] active:scale-98 shadow-lg shadow-[#0095ff]/20 text-white font-bold py-2.5 px-4 rounded-xl cursor-pointer transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
+                  {authLoading && <Loader2 className="w-4 h-4 animate-spin" />}
                   {isSignUp ? "Sign Up" : "Sign In"}
                 </button>
               </form>
