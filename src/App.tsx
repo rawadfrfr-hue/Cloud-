@@ -3,6 +3,7 @@ import { auth, googleProvider } from "./firebase";
 import { signInWithPopup, User as FirebaseUser, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from "firebase/auth";
 import Dashboard from "./components/Dashboard";
 import SharePage from "./components/SharePage";
+import ShortLinkPage from "./components/ShortLinkPage";
 import VerifyEmailPage from "./components/VerifyEmailPage";
 import NebulaLogo from "./components/NebulaLogo";
 import { 
@@ -25,6 +26,7 @@ export default function App() {
 
   const isShareView = window.location.pathname === "/share";
   const isVerifyView = window.location.pathname === "/verify";
+  const isShortLinkView = window.location.pathname.startsWith("/s/");
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -40,11 +42,32 @@ export default function App() {
   }, []);
 
   const handleSignIn = async () => {
+    setAuthError("");
+    setAuthLoading(true);
     try {
       await signInWithPopup(auth, googleProvider);
       setShowAuthModal(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error signing in", error);
+      if (error.code === "auth/unauthorized-domain") {
+        setAuthError(
+          "এই ডোমেইনটি Firebase Console-এ অথরাইজড করা নেই। Google Login চালু করতে: " +
+          "১. Firebase Console > Authentication > Settings > Authorized domains-এ যান। " +
+          "২. আপনার কাস্টম ডোমেনটি (যেমন: nebuladrive.dpdns.org) যুক্ত করুন। " +
+          "--- " +
+          "This domain is not authorized in Firebase Console. To enable Google Login: " +
+          "1. Go to Firebase Console > Authentication > Settings > Authorized domains. " +
+          "2. Add your custom domain (e.g., nebuladrive.dpdns.org)."
+        );
+      } else if (error.code === "auth/popup-closed-by-user") {
+        setAuthError("লগইন উইন্ডোটি বন্ধ করা হয়েছে। (Login popup closed by user.)");
+      } else if (error.code === "auth/popup-blocked") {
+        setAuthError("ব্রাউজার পপআপ ব্লক করেছে। অনুগ্রহ করে পপআপ এলাউ করুন। (Popup blocked by browser. Please allow popups.)");
+      } else {
+        setAuthError(error.message || "Google লগইন করতে সমস্যা হয়েছে।");
+      }
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -133,6 +156,10 @@ export default function App() {
 
   if (isVerifyView) {
     return <VerifyEmailPage />;
+  }
+
+  if (isShortLinkView) {
+    return <ShortLinkPage />;
   }
 
   if (verificationSent) {
@@ -225,7 +252,7 @@ export default function App() {
             The Premium Cloud Workspace for <span className="bg-gradient-to-r from-[#0095ff] to-cyan-400 bg-clip-text text-transparent">Your Files</span>
           </h1>
           <p className="text-slate-400 text-base sm:text-lg max-w-2xl mb-10 leading-relaxed">
-            Manage your files, extract ZIP archives on the fly, and stream high-definition movies and audio tracks directly from your private, state-of-the-art workspace.
+            Secure your digital files with next-generation end-to-end encryption. The ultimate cloud workspace designed for absolute privacy.
           </p>
           <button
             onClick={() => {
@@ -532,7 +559,8 @@ export default function App() {
 
               <button
                 onClick={handleSignIn}
-                className="w-full bg-white/5 hover:bg-white/10 border border-white/10 text-white font-medium py-3 px-4 rounded-xl cursor-pointer transition-all flex items-center justify-center gap-3"
+                disabled={authLoading}
+                className="w-full bg-white/5 hover:bg-white/10 border border-white/10 text-white font-medium py-3 px-4 rounded-xl cursor-pointer transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />
                 Continue with Google

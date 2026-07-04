@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { auth, db, handleFirestoreError, OperationType } from "../firebase";
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from "firebase/firestore";
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, setDoc } from "firebase/firestore";
 import NebulaLogo from "./NebulaLogo";
-import { LogOut, Upload, File, FileArchive, Folder, Loader2, Cloud, Search, Trash, Clock, Star, Menu, X, MoreVertical, Link, RefreshCcw, Trash2, StarOff, User as UserIcon, Lock, Eye, EyeOff, FolderPlus, MoveRight, ChevronLeft, Film, FileText, FileAudio, FileVideo, FileImage, FileCode, LayoutGrid, List } from "lucide-react";
+import { LogOut, Upload, File, FileArchive, Folder, Loader2, Cloud, Search, Trash, Clock, Star, Menu, X, MoreVertical, Link, RefreshCcw, Trash2, StarOff, User as UserIcon, Lock, Eye, EyeOff, FolderPlus, MoveRight, ChevronLeft, Film, FileText, FileAudio, FileVideo, FileImage, FileCode, LayoutGrid, List, Sparkles, Check, Copy } from "lucide-react";
 import { User, updatePassword } from "firebase/auth";
 
 const getFileIcon = (fileName: string, fileType: string, className = "w-6 h-6 text-sky-500") => {
@@ -57,6 +57,10 @@ export default function Dashboard({ user }: DashboardProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [showMoveModal, setShowMoveModal] = useState<string | null>(null);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [showSpecialLinkModal, setShowSpecialLinkModal] = useState<any>(null); // holds the file object
+  const [specialLinkExpiry, setSpecialLinkExpiry] = useState("never");
+  const [specialLinkPassword, setSpecialLinkPassword] = useState("");
+  const [generatedShortLink, setGeneratedShortLink] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [passwordSuccess, setPasswordSuccess] = useState("");
@@ -462,6 +466,50 @@ export default function Dashboard({ user }: DashboardProps) {
     setSuccessMsg("Share link copied to clipboard!");
     setTimeout(() => setSuccessMsg(null), 3000);
     setOpenMenuId(null);
+  };
+
+  const generateRandomCode = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 6; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  };
+
+  const handleGenerateSpecialLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!showSpecialLinkModal) return;
+
+    try {
+      const code = generateRandomCode();
+      
+      let expiresAt: number | null = null;
+      if (specialLinkExpiry !== "never") {
+        const days = parseInt(specialLinkExpiry);
+        expiresAt = Date.now() + days * 24 * 60 * 60 * 1000;
+      }
+
+      try {
+        await setDoc(doc(db, "shortlinks", code), {
+          shortCode: code,
+          fileUrl: showSpecialLinkModal.fileUrl,
+          fileName: showSpecialLinkModal.name,
+          userId: user.uid,
+          createdAt: Date.now(),
+          expiresAt: expiresAt,
+          passwordHash: specialLinkPassword || null
+        });
+        
+        const url = `${window.location.origin}/s/${code}`;
+        setGeneratedShortLink(url);
+      } catch (dbErr) {
+        handleFirestoreError(dbErr, OperationType.WRITE, "shortlinks");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg("Failed to generate short link.");
+    }
   };
 
   const handleDownload = (fileUrl: string, fileName: string) => {
@@ -976,6 +1024,12 @@ export default function Dashboard({ user }: DashboardProps) {
                           <Link className="w-4 h-4" /> Copy Link
                         </button>
                         <button 
+                          onClick={(e) => { e.stopPropagation(); setShowSpecialLinkModal(file); setOpenMenuId(null); }}
+                          className="w-full px-4 py-2 text-left text-sm text-[var(--primary-brand-color)] hover:bg-[var(--primary-brand-color)]/10 flex items-center gap-2 cursor-pointer transition-colors"
+                        >
+                          <Sparkles className="w-4 h-4" /> Special Link
+                        </button>
+                        <button 
                           onClick={(e) => { e.stopPropagation(); handleToggleStar(file.id, file.isStarred); }}
                           className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white flex items-center gap-2 cursor-pointer"
                         >
@@ -1344,6 +1398,97 @@ export default function Dashboard({ user }: DashboardProps) {
         </div>
       )}
 
+      {/* Special Link Modal */}
+      {showSpecialLinkModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+          <div className="bg-[#161b22] border border-white/10 p-6 rounded-2xl max-w-md w-full shadow-2xl animate-fade-in relative">
+            <button 
+              onClick={() => { setShowSpecialLinkModal(null); setGeneratedShortLink(""); setSpecialLinkPassword(""); }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-[var(--primary-brand-color)]/20 rounded-xl">
+                <Sparkles className="w-5 h-5 text-[var(--primary-brand-color)]" />
+              </div>
+              <h2 className="text-xl font-bold text-white tracking-tight">Create Special Link</h2>
+            </div>
+            
+            {!generatedShortLink ? (
+              <form onSubmit={handleGenerateSpecialLink} className="space-y-4">
+                <p className="text-sm text-slate-400">
+                  Generate a short, memorable link for <strong className="text-slate-200">{showSpecialLinkModal.name}</strong>.
+                </p>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1">Expiration (Optional)</label>
+                  <select 
+                    value={specialLinkExpiry}
+                    onChange={(e) => setSpecialLinkExpiry(e.target.value)}
+                    className="w-full bg-black/50 border border-white/10 text-white rounded-xl px-4 py-3 outline-none focus:border-[var(--primary-brand-color)] focus:ring-1 focus:ring-[var(--primary-brand-color)] appearance-none"
+                  >
+                    <option value="never">Never expires</option>
+                    <option value="1">1 Day</option>
+                    <option value="7">7 Days</option>
+                    <option value="30">30 Days</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1">Password (Optional)</label>
+                  <input 
+                    type="text" 
+                    placeholder="Leave empty for no password"
+                    value={specialLinkPassword}
+                    onChange={(e) => setSpecialLinkPassword(e.target.value)}
+                    className="w-full bg-black/50 border border-white/10 text-white rounded-xl px-4 py-3 outline-none focus:border-[var(--primary-brand-color)] focus:ring-1 focus:ring-[var(--primary-brand-color)] placeholder:text-slate-500"
+                  />
+                </div>
+                <button 
+                  type="submit"
+                  className="w-full py-3 bg-[var(--primary-brand-color)] hover:bg-[var(--primary-brand-hover)] text-white text-sm font-bold rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 mt-2"
+                >
+                  <Link className="w-4 h-4" /> Generate Link
+                </button>
+              </form>
+            ) : (
+              <div className="space-y-5 flex flex-col items-center py-4">
+                <div className="w-16 h-16 bg-emerald-500/10 border border-emerald-500/20 rounded-full flex items-center justify-center mb-2">
+                  <Check className="w-8 h-8 text-emerald-500" />
+                </div>
+                <p className="text-slate-300 text-sm text-center">Your special link is ready!</p>
+                
+                <div className="w-full bg-black/50 border border-white/10 rounded-xl p-4 flex items-center justify-between gap-3 group relative overflow-hidden">
+                  <span className="text-[var(--primary-brand-color)] font-mono text-lg font-medium truncate">{generatedShortLink}</span>
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText(generatedShortLink);
+                      setSuccessMsg("Special link copied!");
+                      setTimeout(() => setSuccessMsg(null), 3000);
+                    }}
+                    className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors flex-shrink-0"
+                    title="Copy Link"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {specialLinkPassword && (
+                  <p className="text-xs text-amber-400/80 bg-amber-400/10 px-3 py-2 rounded-lg border border-amber-400/20 text-center">
+                    Protected with password: <strong className="font-mono ml-1">{specialLinkPassword}</strong>
+                  </p>
+                )}
+
+                <button 
+                  onClick={() => { setShowSpecialLinkModal(null); setGeneratedShortLink(""); setSpecialLinkPassword(""); }}
+                  className="w-full py-2.5 bg-white/5 hover:bg-white/10 text-white text-sm font-medium rounded-xl transition-colors mt-2"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

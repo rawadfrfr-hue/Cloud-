@@ -20,5 +20,14 @@ service cloud.firestore {
       allow update: if request.auth != null && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid;
       allow delete: if request.auth != null && resource.data.userId == request.auth.uid;
     }
+
+    match /shortlinks/{document} {
+      // Anyone can read a shortlink
+      allow read: if true;
+      // Only authenticated users can create their own shortlinks
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      // Only owner can update/delete
+      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+    }
   }
 }

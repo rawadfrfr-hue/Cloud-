@@ -6,10 +6,32 @@ import NebulaLogo from "./NebulaLogo";
 import { 
   Play, Pause, Download, FolderPlus, MoreVertical, X, Menu, Copy, Check, ExternalLink, 
   Loader2, Mail, Lock, Eye, EyeOff, Film, Globe, Info, Heart, ArrowRight,
-  Maximize, Minimize, Volume2, VolumeX, Sun
+  Maximize, Minimize, Volume2, VolumeX, Sun, Image as ImageIcon, Music, FileText, File, ZoomIn, ZoomOut, RefreshCw
 } from "lucide-react";
 
-export default function SharePage() {
+const getFileType = (name: string) => {
+  const extension = name.split('.').pop()?.toLowerCase() || "";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff"].includes(extension)) {
+    return "image";
+  }
+  if (["mp3", "wav", "ogg", "m4a", "aac", "flac"].includes(extension)) {
+    return "audio";
+  }
+  if (extension === "pdf") {
+    return "pdf";
+  }
+  if (["mp4", "mov", "avi", "mkv", "webm", "3gp"].includes(extension)) {
+    return "video";
+  }
+  return "document";
+};
+
+interface SharePageProps {
+  explicitFileKey?: string;
+  explicitFileName?: string;
+}
+
+export default function SharePage({ explicitFileKey, explicitFileName }: SharePageProps = {}) {
   const [user, setUser] = useState<User | null>(null);
   const [userLoading, setUserLoading] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -28,6 +50,11 @@ export default function SharePage() {
   const [saveErrorMsg, setSaveErrorMsg] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [verificationSent, setVerificationSent] = useState(false);
+  
+  // Custom states for rich multi-format preview
+  const [imageScale, setImageScale] = useState(1);
+  const [imageRotation, setImageRotation] = useState(0);
+  const [showPdfPreview, setShowPdfPreview] = useState(true);
 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -284,10 +311,11 @@ export default function SharePage() {
 
   // Get key and name from URL query params
   const urlParams = new URLSearchParams(window.location.search);
-  const fileKey = urlParams.get("key") || "";
-  const rawFileName = urlParams.get("name") || "";
+  const fileKey = explicitFileKey || urlParams.get("key") || "";
+  const rawFileName = explicitFileName || urlParams.get("name") || "";
   // If no name is provided, extract it from the key path
   const fileName = rawFileName || fileKey.split("/").pop() || "Shared Video";
+  const fileType = getFileType(fileName);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -354,10 +382,54 @@ export default function SharePage() {
     try {
       // Determine file type from extension
       const ext = fileName.split('.').pop()?.toLowerCase();
-      let detectedType = "video/mp4"; // default for this preview page
-      if (ext === 'mov') detectedType = "video/quicktime";
-      if (ext === 'avi') detectedType = "video/x-msvideo";
-      if (ext === 'mkv') detectedType = "video/x-matroska";
+      let detectedType = "application/octet-stream";
+      
+      const mimeTypes: { [key: string]: string } = {
+        // Video
+        mp4: "video/mp4",
+        webm: "video/webm",
+        ogg: "video/ogg",
+        mov: "video/quicktime",
+        avi: "video/x-msvideo",
+        mkv: "video/x-matroska",
+        // Image
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        png: "image/png",
+        gif: "image/gif",
+        webp: "image/webp",
+        svg: "image/svg+xml",
+        bmp: "image/bmp",
+        // Audio
+        mp3: "audio/mpeg",
+        wav: "audio/wav",
+        m4a: "audio/mp4",
+        // PDF
+        pdf: "application/pdf",
+        // Documents
+        txt: "text/plain",
+        doc: "application/msword",
+        docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        xls: "application/vnd.ms-excel",
+        xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ppt: "application/vnd.ms-powerpoint",
+        pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        zip: "application/zip",
+        rar: "application/vnd.rar",
+        "7z": "application/x-7z-compressed"
+      };
+
+      if (ext && mimeTypes[ext]) {
+        detectedType = mimeTypes[ext];
+      } else if (fileType === "video") {
+        detectedType = "video/mp4";
+      } else if (fileType === "image") {
+        detectedType = "image/jpeg";
+      } else if (fileType === "audio") {
+        detectedType = "audio/mpeg";
+      } else if (fileType === "pdf") {
+        detectedType = "application/pdf";
+      }
 
       try {
         await addDoc(collection(db, "files"), {
@@ -589,165 +661,343 @@ export default function SharePage() {
           </div>
         </header>
 
-        {/* Display bold, prominent shared video file name */}
+        {/* Display bold, prominent shared file name */}
         <div className="mb-6">
           <h2 className="text-xl md:text-2xl font-bold text-white tracking-tight truncate max-w-full" title={fileName}>
             {fileName}
           </h2>
           <p className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
-            <Info className="w-3.5 h-3.5 text-sky-400/80" /> Double click or click center overlay button to play/pause.
+            <Info className="w-3.5 h-3.5 text-sky-400/80" />
+            {fileType === "video" && "Double click or click center overlay button to play/pause."}
+            {fileType === "image" && "Use the controls below to zoom, rotate, or view fullscreen."}
+            {fileType === "audio" && "Click play below to listen to the audio track."}
+            {fileType === "pdf" && "Use the toggle button to preview or download the PDF document."}
+            {fileType === "document" && "Download the file to view its contents on your device."}
           </p>
         </div>
 
-        {/* 2. Middle Section (Video Player & Quick Links) */}
+        {/* 2. Middle Section (Multi-Format Player / Viewer) */}
         <div className="w-full flex flex-col">
-          {/* Responsive video container with letterboxing */}
-          <div 
-            ref={containerRef}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
-            onMouseMove={resetControlsTimeout}
-            className={`bg-black overflow-hidden flex items-center justify-center relative group select-none transition-all duration-300 ${
-              isFullscreen 
-                ? "w-screen h-screen fixed inset-0 z-50 animate-fade-in" 
-                : "w-full aspect-video rounded-3xl border border-white/10"
-            }`}
-          >
-            
-            <video 
-              ref={videoRef}
-              src={`/api/download?key=${encodeURIComponent(fileKey)}`}
-              onEnded={handleVideoEnded}
-              onTimeUpdate={handleTimeUpdate}
-              onLoadedMetadata={handleLoadedMetadata}
-              className="w-full h-full object-contain bg-black"
-              playsInline
-            >
-              Your browser does not support the video tag.
-            </video>
-
-            {/* Brightness overlay layer */}
+          {/* Conditional media containers */}
+          {fileType === "video" && (
             <div 
-              className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-150"
-              style={{ opacity: 1 - brightness }}
-            />
-
-            {/* Gesture indicator popup HUD */}
-            {gestureIndicator && (
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/85 border border-white/10 px-5 py-3 rounded-2xl flex flex-col items-center gap-2 pointer-events-none z-40 shadow-2xl backdrop-blur-md">
-                {gestureIndicator.type === 'volume' ? (
-                  <>
-                    {gestureIndicator.value === 0 ? <VolumeX className="w-8 h-8 text-rose-400" /> : <Volume2 className="w-8 h-8 text-[var(--primary-brand-color)]" />}
-                    <span className="text-sm font-bold text-white">Volume: {gestureIndicator.value}%</span>
-                  </>
-                ) : (
-                  <>
-                    <Sun className="w-8 h-8 text-amber-400 animate-pulse" />
-                    <span className="text-sm font-bold text-white">Brightness: {gestureIndicator.value}%</span>
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* Center-Overlaid Play Button when paused */}
-            {!isPlaying && (
-              <div 
-                onClick={handlePlayToggle}
-                className="absolute inset-0 bg-black/30 flex items-center justify-center cursor-pointer transition-all duration-300 group-hover:bg-black/45"
-              >
-                <button 
-                  className="w-16 h-16 rounded-full bg-[var(--primary-brand-color)] hover:bg-[var(--primary-brand-hover)] text-white flex items-center justify-center shadow-2xl shadow-[var(--primary-brand-color)]/50 transition-all transform hover:scale-110 active:scale-95 duration-200"
-                >
-                  <Play className="w-7 h-7 fill-white translate-x-0.5" />
-                </button>
-              </div>
-            )}
-
-            {/* Custom Interactive HUD Video Controls Container */}
-            <div className={`video-controls-container absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent p-4 flex flex-col gap-3 transition-opacity duration-300 z-30 ${showControls || !isPlaying ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+              ref={containerRef}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              onMouseMove={resetControlsTimeout}
+              className={`bg-black overflow-hidden flex items-center justify-center relative group select-none transition-all duration-300 ${
+                isFullscreen 
+                  ? "w-screen h-screen fixed inset-0 z-50 animate-fade-in" 
+                  : "w-full aspect-video rounded-3xl border border-white/10"
+              }`}
+            >
               
-              {/* Custom Seekbar Timeline */}
-              <div 
-                ref={seekbarRef}
-                onMouseDown={handleSeekbarMouseDown}
-                onTouchStart={handleSeekbarTouchStart}
-                className="w-full h-4 flex items-center cursor-pointer group/seekbar select-none"
+              <video 
+                ref={videoRef}
+                src={`/api/download?key=${encodeURIComponent(fileKey)}`}
+                onEnded={handleVideoEnded}
+                onTimeUpdate={handleTimeUpdate}
+                onLoadedMetadata={handleLoadedMetadata}
+                className="w-full h-full object-contain bg-black"
+                playsInline
               >
-                <div className="w-full h-1 bg-white/20 rounded-full relative group-hover/seekbar:h-1.5 transition-all overflow-visible">
-                  <div 
-                    className="absolute left-0 top-0 h-full bg-[var(--primary-brand-color)] rounded-full"
-                    style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-                  />
-                  <div 
-                    className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-md scale-0 group-hover/seekbar:scale-100 transition-transform duration-100 border border-[var(--primary-brand-color)]"
-                    style={{ left: `calc(${duration ? (currentTime / duration) * 100 : 0}% - 6px)` }}
-                  />
-                </div>
-              </div>
+                Your browser does not support the video tag.
+              </video>
 
-              {/* Controls Row */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  {/* Play/Pause Button */}
+              {/* Brightness overlay layer */}
+              <div 
+                className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-150"
+                style={{ opacity: 1 - brightness }}
+              />
+
+              {/* Gesture indicator popup HUD */}
+              {gestureIndicator && (
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/85 border border-white/10 px-5 py-3 rounded-2xl flex flex-col items-center gap-2 pointer-events-none z-40 shadow-2xl backdrop-blur-md">
+                  {gestureIndicator.type === 'volume' ? (
+                    <>
+                      {gestureIndicator.value === 0 ? <VolumeX className="w-8 h-8 text-rose-400" /> : <Volume2 className="w-8 h-8 text-[var(--primary-brand-color)]" />}
+                      <span className="text-sm font-bold text-white">Volume: {gestureIndicator.value}%</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sun className="w-8 h-8 text-amber-400 animate-pulse" />
+                      <span className="text-sm font-bold text-white">Brightness: {gestureIndicator.value}%</span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Center-Overlaid Play Button when paused */}
+              {!isPlaying && (
+                <div 
+                  onClick={handlePlayToggle}
+                  className="absolute inset-0 bg-black/30 flex items-center justify-center cursor-pointer transition-all duration-300 group-hover:bg-black/45"
+                >
                   <button 
-                    onClick={handlePlayToggle}
-                    className="p-1.5 hover:bg-white/10 rounded-lg text-white transition-all transform hover:scale-110 active:scale-95"
+                    className="w-16 h-16 rounded-full bg-[var(--primary-brand-color)] hover:bg-[var(--primary-brand-hover)] text-white flex items-center justify-center shadow-2xl shadow-[var(--primary-brand-color)]/50 transition-all transform hover:scale-110 active:scale-95 duration-200"
                   >
-                    {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white" />}
+                    <Play className="w-7 h-7 fill-white translate-x-0.5" />
                   </button>
-
-                  {/* Time Display */}
-                  <span className="text-xs font-mono text-slate-300">
-                    {formatTime(currentTime)} / {formatTime(duration)}
-                  </span>
                 </div>
+              )}
 
-                <div className="flex items-center gap-3">
-                  {/* Volume Slider Controls */}
-                  <div className="flex items-center gap-2 group/volume">
-                    <button 
-                      onClick={handleToggleMute}
-                      className="p-1.5 hover:bg-white/10 rounded-lg text-white transition-colors"
-                    >
-                      {volume === 0 ? <VolumeX className="w-5 h-5 text-rose-400" /> : <Volume2 className="w-5 h-5" />}
-                    </button>
-                    
-                    <input 
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.05"
-                      value={volume}
-                      onChange={(e) => {
-                        const newVol = parseFloat(e.target.value);
-                        setVolume(newVol);
-                        if (videoRef.current) videoRef.current.volume = newVol;
-                      }}
-                      className="w-0 group-hover/volume:w-16 transition-all duration-200 accent-[var(--primary-brand-color)] h-1 rounded-lg appearance-none bg-white/20 cursor-pointer hidden md:block"
+              {/* Custom Interactive HUD Video Controls Container */}
+              <div className={`video-controls-container absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent p-4 flex flex-col gap-3 transition-opacity duration-300 z-30 ${showControls || !isPlaying ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+                
+                {/* Custom Seekbar Timeline */}
+                <div 
+                  ref={seekbarRef}
+                  onMouseDown={handleSeekbarMouseDown}
+                  onTouchStart={handleSeekbarTouchStart}
+                  className="w-full h-4 flex items-center cursor-pointer group/seekbar select-none"
+                >
+                  <div className="w-full h-1 bg-white/20 rounded-full relative group-hover/seekbar:h-1.5 transition-all overflow-visible">
+                    <div 
+                      className="absolute left-0 top-0 h-full bg-[var(--primary-brand-color)] rounded-full"
+                      style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+                    />
+                    <div 
+                      className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-md scale-0 group-hover/seekbar:scale-100 transition-transform duration-100 border border-[var(--primary-brand-color)]"
+                      style={{ left: `calc(${duration ? (currentTime / duration) * 100 : 0}% - 6px)` }}
                     />
                   </div>
+                </div>
 
-                  {/* Fullscreen Trigger */}
-                  <button 
-                    onClick={toggleFullscreen}
-                    className="p-1.5 hover:bg-white/10 rounded-lg text-white transition-all transform hover:scale-110 active:scale-95"
-                    title="Toggle Fullscreen"
-                  >
-                    {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
-                  </button>
+                {/* Controls Row */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    {/* Play/Pause Button */}
+                    <button 
+                      onClick={handlePlayToggle}
+                      className="p-1.5 hover:bg-white/10 rounded-lg text-white transition-all transform hover:scale-110 active:scale-95"
+                    >
+                      {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white" />}
+                    </button>
+
+                    {/* Time Display */}
+                    <span className="text-xs font-mono text-slate-300">
+                      {formatTime(currentTime)} / {formatTime(duration)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    {/* Volume Slider Controls */}
+                    <div className="flex items-center gap-2 group/volume">
+                      <button 
+                        onClick={handleToggleMute}
+                        className="p-1.5 hover:bg-white/10 rounded-lg text-white transition-colors"
+                      >
+                        {volume === 0 ? <VolumeX className="w-5 h-5 text-rose-400" /> : <Volume2 className="w-5 h-5" />}
+                      </button>
+                      
+                      <input 
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={volume}
+                        onChange={(e) => {
+                          const newVol = parseFloat(e.target.value);
+                          setVolume(newVol);
+                          if (videoRef.current) videoRef.current.volume = newVol;
+                        }}
+                        className="w-0 group-hover/volume:w-16 transition-all duration-200 accent-[var(--primary-brand-color)] h-1 rounded-lg appearance-none bg-white/20 cursor-pointer hidden md:block"
+                      />
+                    </div>
+
+                    {/* Fullscreen Trigger */}
+                    <button 
+                      onClick={toggleFullscreen}
+                      className="p-1.5 hover:bg-white/10 rounded-lg text-white transition-all transform hover:scale-110 active:scale-95"
+                      title="Toggle Fullscreen"
+                    >
+                      {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Secondary Action Row directly below the video */}
+          {fileType === "image" && (
+            <div 
+              ref={containerRef}
+              className={`bg-black overflow-hidden flex flex-col items-center justify-between relative group select-none transition-all duration-300 ${
+                isFullscreen 
+                  ? "w-screen h-screen fixed inset-0 z-50 p-4" 
+                  : "w-full aspect-video rounded-3xl border border-white/10 p-6"
+              }`}
+            >
+              <div className="flex-1 w-full flex items-center justify-center overflow-auto animate-fade-in">
+                <img
+                  src={`/api/download?key=${encodeURIComponent(fileKey)}`}
+                  alt={fileName}
+                  referrerPolicy="no-referrer"
+                  className="max-w-full max-h-[80%] md:max-h-[90%] object-contain transition-all duration-200"
+                  style={{
+                    transform: `scale(${imageScale}) rotate(${imageRotation}deg)`,
+                  }}
+                />
+              </div>
+
+              {/* Simple Zoom Overlay Controls */}
+              <div className="flex items-center gap-2 bg-slate-900/80 border border-white/10 px-4 py-2 rounded-2xl backdrop-blur-md shadow-2xl mt-4 shrink-0">
+                <button
+                  onClick={() => setImageScale(prev => Math.min(prev + 0.25, 3.5))}
+                  className="p-2 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-colors"
+                  title="Zoom In"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setImageScale(prev => Math.max(prev - 0.25, 0.5))}
+                  className="p-2 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-colors"
+                  title="Zoom Out"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setImageRotation(prev => (prev + 90) % 360)}
+                  className="p-2 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-colors"
+                  title="Rotate"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+                <div className="w-[1px] h-6 bg-white/10 mx-1"></div>
+                <button
+                  onClick={() => { setImageScale(1); setImageRotation(0); }}
+                  className="text-xs font-semibold px-2.5 py-1.5 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-colors"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={toggleFullscreen}
+                  className="p-2 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-colors"
+                  title="Toggle Fullscreen"
+                >
+                  {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {fileType === "audio" && (
+            <div className="w-full flex flex-col items-center justify-center p-8 md:p-12 bg-slate-950/40 rounded-3xl border border-white/10 relative overflow-hidden aspect-video">
+              <div className="absolute inset-0 pointer-events-none opacity-[0.03]">
+                {/* Visualizer bars placeholder */}
+                <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-[var(--primary-brand-color)] to-transparent flex items-end justify-center gap-1.5 px-8">
+                  {[...Array(24)].map((_, i) => (
+                    <div 
+                      key={i} 
+                      className="w-1.5 bg-[var(--primary-brand-color)] rounded-t-full"
+                      style={{ 
+                        height: `${Math.random() * 80 + 15}%`,
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Core disc/art layout */}
+              <div className="w-20 h-20 bg-[var(--primary-brand-color)]/10 border border-[var(--primary-brand-color)]/20 rounded-full flex items-center justify-center mb-6 shadow-2xl shadow-[var(--primary-brand-color)]/10 relative">
+                <Music className="w-10 h-10 text-[var(--primary-brand-color)] animate-pulse" />
+              </div>
+
+              <div className="text-center mb-6 max-w-sm">
+                <h3 className="text-base font-bold text-white truncate px-4">{fileName}</h3>
+                <p className="text-xs text-slate-500 mt-1">Audio Recording • Ready to stream</p>
+              </div>
+
+              {/* Audio controls */}
+              <div className="w-full max-w-md bg-white/5 border border-white/5 p-4 rounded-2xl backdrop-blur-sm">
+                <audio 
+                  src={`/api/download?key=${encodeURIComponent(fileKey)}`}
+                  controls 
+                  className="w-full accent-[var(--primary-brand-color)]"
+                />
+              </div>
+            </div>
+          )}
+
+          {fileType === "pdf" && (
+            <div className="w-full flex flex-col bg-slate-950/40 rounded-3xl border border-white/10 overflow-hidden">
+              {/* PDF Header with toggles */}
+              <div className="flex items-center justify-between border-b border-white/5 px-6 py-4 bg-white/5">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-rose-500/10 border border-rose-500/20 rounded-lg flex items-center justify-center">
+                    <FileText className="w-4.5 h-4.5 text-rose-500" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-semibold text-white truncate max-w-[200px] sm:max-w-xs">{fileName}</h3>
+                    <p className="text-[10px] text-slate-500">PDF Document</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowPdfPreview(!showPdfPreview)}
+                  className="text-xs font-semibold px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-slate-300 hover:text-white transition-colors flex items-center gap-1.5"
+                >
+                  {showPdfPreview ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  {showPdfPreview ? "Hide Preview" : "Show PDF Preview"}
+                </button>
+              </div>
+
+              {/* PDF Display */}
+              {showPdfPreview ? (
+                <div className="w-full h-[320px] sm:h-[420px] bg-slate-900 flex items-center justify-center relative">
+                  <iframe
+                    src={`/api/download?key=${encodeURIComponent(fileKey)}#toolbar=0`}
+                    className="w-full h-full border-none bg-slate-900"
+                    title={fileName}
+                  />
+                </div>
+              ) : (
+                <div className="py-16 px-6 flex flex-col items-center justify-center text-center">
+                  <div className="w-16 h-16 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex items-center justify-center mb-4 shadow-xl">
+                    <FileText className="w-8 h-8 text-rose-500" />
+                  </div>
+                  <h3 className="text-sm font-bold text-white px-4 mb-1.5">{fileName}</h3>
+                  <p className="text-xs text-slate-500 max-w-sm mb-6 leading-relaxed">
+                    This is a PDF document. You can preview it using the "Show PDF Preview" option, or click below to download immediately.
+                  </p>
+                  <button
+                    onClick={handleDownloadDirect}
+                    className="px-5 py-2.5 bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold rounded-xl flex items-center gap-2 shadow-lg shadow-rose-500/10 hover:shadow-rose-500/20 transition-all"
+                  >
+                    <Download className="w-4 h-4" /> Download PDF File
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {fileType === "document" && (
+            <div className="w-full flex flex-col items-center justify-center py-16 px-6 bg-slate-950/40 rounded-3xl border border-white/10 text-center aspect-video">
+              <div className="w-16 h-16 bg-[var(--primary-brand-color)]/10 border border-[var(--primary-brand-color)]/20 rounded-2xl flex items-center justify-center mb-5 shadow-2xl shadow-[var(--primary-brand-color)]/5">
+                <File className="w-8 h-8 text-[var(--primary-brand-color)]" />
+              </div>
+              
+              <h3 className="text-sm font-bold text-white px-4 mb-1.5 truncate max-w-sm">{fileName}</h3>
+              <p className="text-xs text-slate-500 max-w-xs mb-6 leading-relaxed">
+                This document type cannot be previewed in your browser. Download the file to view it offline.
+              </p>
+
+              <button
+                onClick={handleDownloadDirect}
+                className="py-2.5 px-5 bg-[var(--primary-brand-color)] hover:bg-[var(--primary-brand-hover)] text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-[var(--primary-brand-color)]/10 hover:shadow-[var(--primary-brand-color)]/20 transition-all transform hover:-translate-y-0.5"
+              >
+                <Download className="w-4 h-4" /> Download File
+              </button>
+            </div>
+          )}
+
+          {/* Secondary Action Row directly below the player/viewer */}
           <div className="flex items-center justify-between mt-4 px-2">
             <button 
               onClick={() => window.location.href = "/"}
               className="text-xs text-[var(--primary-brand-color)] hover:text-[var(--primary-brand-hover)] font-bold flex items-center gap-1.5 transition-colors group"
             >
-              Go to Nabula Drive <ExternalLink className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+              Go to Nebula Drive <ExternalLink className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
             </button>
 
             <div className="relative">
