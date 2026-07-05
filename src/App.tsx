@@ -113,7 +113,21 @@ export default function App() {
       } catch (error: any) {
         console.error("Error with email signup", error);
         if (error.code === 'auth/email-already-in-use') {
-           setAuthError("Email is already registered. Please sign in instead.");
+           try {
+             // Try to sign in to see if it's an unverified account with the same password
+             const userCredential = await signInWithEmailAndPassword(auth, email, password);
+             if (!userCredential.user.emailVerified) {
+               await sendEmailVerification(userCredential.user);
+               await auth.signOut();
+               setVerificationSent(true);
+               setShowAuthModal(false);
+             } else {
+               // Account exists and is verified
+               setAuthError("Email is already registered and verified. Please sign in instead.");
+             }
+           } catch (signInError) {
+             setAuthError("Email is already registered. If you haven't verified it, please sign in to resend the link.");
+           }
         } else {
            setAuthError(error.message);
         }
