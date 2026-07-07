@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from "../firebase";
 import { onAuthStateChanged, User, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup } from "firebase/auth";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { useNavigate } from "react-router-dom";
 import NebulaLogo from "./NebulaLogo";
 import { 
   Play, Pause, Download, FolderPlus, MoreVertical, X, Menu, Copy, Check, ExternalLink, 
@@ -32,6 +33,7 @@ interface SharePageProps {
 }
 
 export default function SharePage({ explicitFileKey, explicitFileName }: SharePageProps = {}) {
+  const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
   const [userLoading, setUserLoading] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -594,7 +596,7 @@ export default function SharePage({ explicitFileKey, explicitFileName }: SharePa
                 </div>
                 <span className="text-xs font-medium text-slate-300 truncate max-w-[120px]">{user.email}</span>
                 <button 
-                  onClick={() => window.location.href = "/"}
+                  onClick={() => navigate("/")}
                   className="text-xs text-[var(--primary-brand-color)] hover:text-[var(--primary-brand-hover)] transition-colors font-semibold border-l border-white/10 pl-3"
                 >
                   My Drive
@@ -628,7 +630,7 @@ export default function SharePage({ explicitFileKey, explicitFileName }: SharePa
                       <p className="text-xs font-semibold text-white truncate">{user.email}</p>
                     </div>
                     <button 
-                      onClick={() => window.location.href = "/"}
+                      onClick={() => navigate("/")}
                       className="w-full text-left py-2 px-2 hover:bg-white/5 rounded-xl text-sm font-semibold text-[var(--primary-brand-color)] flex items-center gap-2"
                     >
                       <ExternalLink className="w-4 h-4" /> Go to Dashboard
@@ -994,7 +996,7 @@ export default function SharePage({ explicitFileKey, explicitFileName }: SharePa
           {/* Secondary Action Row directly below the player/viewer */}
           <div className="flex items-center justify-between mt-4 px-2">
             <button 
-              onClick={() => window.location.href = "/"}
+              onClick={() => navigate("/")}
               className="text-xs text-[var(--primary-brand-color)] hover:text-[var(--primary-brand-hover)] font-bold flex items-center gap-1.5 transition-colors group"
             >
               Go to Nebula Drive <ExternalLink className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import SharePage from "./SharePage";
@@ -13,8 +14,8 @@ export default function ShortLinkPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordError, setPasswordError] = useState("");
 
-  // Extract code from /s/CODE
-  const shortCode = window.location.pathname.split("/s/")[1]?.split("/")[0] || "";
+  const { shortCode } = useParams();
+  const navigate = useNavigate();
 
   useEffect(() => {
     async function fetchShortLink() {
@@ -94,7 +95,7 @@ export default function ShortLinkPage() {
           <h2 className="text-xl font-bold text-white mb-2">Link Unavailable</h2>
           <p className="text-slate-400 text-sm mb-8 leading-relaxed">{error}</p>
           <button 
-            onClick={() => window.location.href = "/"}
+            onClick={() => navigate("/")}
             className="px-6 py-2.5 bg-white/10 hover:bg-white/15 text-white font-semibold rounded-xl transition-all text-sm"
           >
             Go to Homepage

@@ -6,11 +6,13 @@ import SharePage from "./components/SharePage";
 import ShortLinkPage from "./components/ShortLinkPage";
 import VerifyEmailPage from "./components/VerifyEmailPage";
 import NebulaLogo from "./components/NebulaLogo";
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { 
   Cloud, Loader2, Mail, Lock, Eye, EyeOff, Film, X, Check, Folder, Archive, Shield, Zap, Sparkles, ArrowRight, User
 } from "lucide-react";
 
-export default function App() {
+function AppContent() {
+
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
@@ -24,9 +26,6 @@ export default function App() {
   const [verificationSent, setVerificationSent] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
 
-  const isShareView = window.location.pathname === "/share";
-  const isVerifyView = window.location.pathname === "/verify";
-  const isShortLinkView = window.location.pathname.startsWith("/s/");
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -163,19 +162,10 @@ export default function App() {
     );
   }
 
-  // Render the public SharePage view bypass for guests or users alike
-  if (isShareView) {
-    return <SharePage />;
-  }
 
-  if (isVerifyView) {
-    return <VerifyEmailPage />;
-  }
 
-  if (isShortLinkView) {
-    return <ShortLinkPage />;
-  }
 
+  const renderAuthLayer = () => {
   if (verificationSent) {
     return (
       <div className="min-h-screen bg-[#0d1117] text-slate-200 font-sans flex flex-col relative overflow-hidden justify-center items-center px-4 selection:bg-[#0095ff]/30 selection:text-white">
@@ -608,6 +598,24 @@ export default function App() {
       </div>
       <Dashboard user={user} />
     </div>
+  );
+  };
+
+  return (
+    <Routes>
+      <Route path="/share" element={<SharePage />} />
+      <Route path="/verify" element={<VerifyEmailPage />} />
+      <Route path="/s/:shortCode" element={<ShortLinkPage />} />
+      <Route path="*" element={renderAuthLayer()} />
+    </Routes>
+  );
+}
+
+export default function App() {
+  return (
+    <Router>
+      <AppContent />
+    </Router>
   );
 }
 

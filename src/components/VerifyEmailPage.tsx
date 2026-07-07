@@ -1,8 +1,10 @@
+import { useNavigate } from 'react-router-dom';
 import React, { useEffect, useState } from 'react';
 import { Mail, Check, X, Loader2 } from 'lucide-react';
 import NebulaLogo from './NebulaLogo';
 
 export default function VerifyEmailPage() {
+  const navigate = useNavigate();
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [message, setMessage] = useState("Verifying your email address...");
 
@@ -74,7 +76,7 @@ export default function VerifyEmailPage() {
         {status !== "loading" && (
           <button
             onClick={() => {
-              window.location.href = '/';
+              navigate("/");
             }}
             className="w-full bg-[#0095ff] hover:bg-[#0084e0] active:scale-95 text-white font-bold py-2.5 px-4 rounded-xl cursor-pointer transition-all duration-150"
           >

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { auth, db, handleFirestoreError, OperationType } from "../firebase";
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, setDoc } from "firebase/firestore";
 import NebulaLogo from "./NebulaLogo";
+import { useLocation, useNavigate } from "react-router-dom";
 import { LogOut, Upload, File, FileArchive, Folder, Loader2, Cloud, Search, Trash, Clock, Star, Menu, X, MoreVertical, Link, RefreshCcw, Trash2, StarOff, User as UserIcon, Lock, Eye, EyeOff, FolderPlus, MoveRight, ChevronLeft, Film, FileText, FileAudio, FileVideo, FileImage, FileCode, LayoutGrid, List, Sparkles, Check, Copy } from "lucide-react";
 import { User, updatePassword } from "firebase/auth";
 
@@ -52,11 +53,30 @@ export default function Dashboard({ user }: DashboardProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"files" | "starred" | "recent" | "trash" | "account">("files");
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const pathParts = location.pathname.split('/').filter(Boolean);
+  
+  let activeTab: "files" | "starred" | "recent" | "trash" | "account" = "files";
+  let currentFolderIdState: string | null = null;
+
+  if (pathParts[0] === 'folder' && pathParts[1]) {
+    activeTab = "files";
+    currentFolderIdState = pathParts[1];
+  } else if (["starred", "recent", "trash", "account"].includes(pathParts[0])) {
+    activeTab = pathParts[0] as any;
+  }
+
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [showMoveModal, setShowMoveModal] = useState<string | null>(null);
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const currentFolderId = currentFolderIdState;
+  
+  const setCurrentFolderId = (folderId: string | null) => {
+    if (folderId) navigate(`/folder/${folderId}`);
+    else navigate('/');
+  };
   const [showSpecialLinkModal, setShowSpecialLinkModal] = useState<any>(null); // holds the file object
   const [specialLinkExpiry, setSpecialLinkExpiry] = useState("never");
   const [specialLinkPassword, setSpecialLinkPassword] = useState("");
@@ -601,23 +621,23 @@ export default function Dashboard({ user }: DashboardProps) {
           </button>
         </div>
         <nav className="px-4 flex-1 space-y-1">
-          <button onClick={() => { setActiveTab('files'); setCurrentFolderId(null); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'files' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
+          <button onClick={() => { navigate('/'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'files' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
             <Folder className={`w-5 h-5 ${activeTab === 'files' ? 'opacity-100 text-sky-400' : 'opacity-60'}`} />
             <span className="font-medium">My Files</span>
           </button>
-          <button onClick={() => { setActiveTab('recent'); setCurrentFolderId(null); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'recent' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
+          <button onClick={() => { navigate('/recent'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'recent' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
             <Clock className={`w-5 h-5 ${activeTab === 'recent' ? 'opacity-100 text-sky-400' : 'opacity-60'}`} />
             <span className="font-medium">Recent</span>
           </button>
-          <button onClick={() => { setActiveTab('starred'); setCurrentFolderId(null); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'starred' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
+          <button onClick={() => { navigate('/starred'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'starred' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
             <Star className={`w-5 h-5 ${activeTab === 'starred' ? 'opacity-100 text-sky-400' : 'opacity-60'}`} />
             <span className="font-medium">Starred</span>
           </button>
-          <button onClick={() => { setActiveTab('trash'); setCurrentFolderId(null); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'trash' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
+          <button onClick={() => { navigate('/trash'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'trash' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
             <Trash className={`w-5 h-5 ${activeTab === 'trash' ? 'opacity-100 text-rose-400' : 'opacity-60'}`} />
             <span className="font-medium">Trash</span>
           </button>
-          <button onClick={() => { setActiveTab('account'); setCurrentFolderId(null); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'account' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
+          <button onClick={() => { navigate('/account'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'account' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
             <UserIcon className={`w-5 h-5 ${activeTab === 'account' ? 'opacity-100 text-sky-400' : 'opacity-60'}`} />
             <span className="font-medium">My Account</span>
           </button>
@@ -662,7 +682,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
           {/* Centered Website Branding */}
           <div 
-            onClick={() => { setCurrentFolderId(null); setActiveTab('files'); }}
+            onClick={() => { navigate('/'); }}
             className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-2.5 cursor-pointer hover:opacity-85 transition-all active:scale-95 z-20"
           >
             <div className="w-8 h-8 bg-white/5 border border-white/10 rounded-lg flex items-center justify-center shadow-md">
